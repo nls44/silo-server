@@ -970,6 +970,7 @@ export interface VersionVideoTrack {
   bitrate?: number;
   video_range?: string;
   video_range_type?: string;
+  color_range?: string;
   color_primaries?: string;
   color_space?: string;
   color_transfer?: string;
@@ -3037,6 +3038,8 @@ export interface LibraryMetadataMatchQueueStatus {
   series_count: number;
   raw_file_count: number;
   total_count: number;
+  pending_count: number;
+  parked_count: number;
 }
 
 export interface LibraryMovieMatchQueueEntry {
@@ -3048,6 +3051,12 @@ export interface LibraryMovieMatchQueueEntry {
   last_attempted_at?: string;
   attempt_count: number;
   last_error?: string;
+  state: "pending" | "parked";
+  failure_kind?: string;
+  failure_detail?: LibraryMetadataMatchFailureDetail;
+  deterministic_attempt_count: number;
+  matcher_revision: number;
+  parked_at?: string;
   updated_at: string;
 }
 
@@ -3059,7 +3068,32 @@ export interface LibrarySeriesMatchQueueEntry {
   last_attempted_at?: string;
   attempt_count: number;
   last_error?: string;
+  state: "pending" | "parked";
+  failure_kind?: string;
+  failure_detail?: LibraryMetadataMatchFailureDetail;
+  deterministic_attempt_count: number;
+  matcher_revision: number;
+  parked_at?: string;
   updated_at: string;
+}
+
+export interface LibraryMetadataMatchFailureDetail {
+  message?: string;
+  decision?: {
+    outcome: string;
+    candidate_count: number;
+    threshold: number;
+    top_candidates?: Array<{
+      title: string;
+      matched_title?: string;
+      year?: number;
+      score: number;
+      provider_ids?: Record<string, string>;
+      sources?: string[];
+      reasons?: string[];
+    }>;
+  };
+  [key: string]: unknown;
 }
 
 export interface LibraryRawMatchBacklogEntry {
@@ -3075,6 +3109,8 @@ export interface LibraryRawMatchBacklogEntry {
 }
 
 export interface LibraryMetadataMatchQueueDetail extends LibraryMetadataMatchQueueStatus {
+  limit: number;
+  offset: number;
   movies: LibraryMovieMatchQueueEntry[];
   series: LibrarySeriesMatchQueueEntry[];
   raw_files: LibraryRawMatchBacklogEntry[];
@@ -3422,6 +3458,8 @@ export interface PluginAsset {
 export interface PluginConfigValue {
   key: string;
   value: Record<string, unknown>;
+  /** Secret fields saved on the server but redacted from value. */
+  configured_secrets?: string[];
 }
 
 export interface PluginAuthBinding {
@@ -3552,6 +3590,8 @@ export interface UpdatePluginInstallationRequest {
 export interface SavePluginConfigRequest {
   key: string;
   value: Record<string, unknown>;
+  /** Explicitly clear these manifest-declared secret fields. */
+  clear_secrets?: string[];
 }
 
 export interface SavePluginAuthBindingRequest {
@@ -4097,6 +4137,23 @@ export interface AdminSettingUpdateResponse {
   restart_required?: boolean;
 }
 
+/** Response of the atomic PUT /admin/settings endpoint. */
+export interface AdminSettingsUpdateResponse {
+  /** Saved non-sensitive values. Secret values are intentionally omitted. */
+  values: Record<string, string>;
+  restart_required: boolean;
+  restart_required_keys?: string[];
+}
+
+export interface AdminServerStatus {
+  started_at: string;
+  restart_required: boolean;
+  restart_required_at?: string;
+  restart_required_reason?: string;
+  restart_requested: boolean;
+  restart_requested_at?: string;
+}
+
 // IP visibility
 export interface UserIPEntry {
   client_ip: string;
@@ -4237,6 +4294,7 @@ export interface SubtitleProviderUpdateRequest {
   api_key?: string;
   username?: string;
   password?: string;
+  clear_credentials?: boolean;
 }
 
 export interface SubtitleProviderTestRequest {
@@ -4339,6 +4397,13 @@ export interface TaskInfo {
 // Match dialog types
 export interface MatchCandidate {
   title: string;
+  original_title?: string;
+  aliases?: Array<{ title: string; language?: string; kind: string; provider?: string }>;
+  title_language?: string;
+  title_is_fallback?: boolean;
+  matched_title?: string;
+  match_score?: number;
+  match_reasons?: string[];
   year: number;
   content_type: string;
   provider_ids: Record<string, string>;

@@ -219,6 +219,7 @@ type VideoTrack struct {
 	Bitrate            int    `json:"bitrate,omitempty"`
 	VideoRange         string `json:"video_range,omitempty"`
 	VideoRangeType     string `json:"video_range_type,omitempty"`
+	ColorRange         string `json:"color_range,omitempty"`
 	ColorPrimaries     string `json:"color_primaries,omitempty"`
 	ColorSpace         string `json:"color_space,omitempty"`
 	ColorTransfer      string `json:"color_transfer,omitempty"`
@@ -415,6 +416,15 @@ type MediaItem struct {
 	CreatedAt                    time.Time
 	UpdatedAt                    time.Time
 	AddedAt                      *time.Time // populated by browse queries (MIN(mil.first_seen_at))
+}
+
+// MediaItemAlias is a provider-confirmed searchable title for a media item.
+type MediaItemAlias struct {
+	ContentID string
+	Title     string
+	Language  string
+	Kind      string
+	Provider  string
 }
 
 // Season represents a row in the seasons table.

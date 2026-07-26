@@ -353,7 +353,7 @@ func (h *PlaybackHandler) HandlePlaybackCapabilityV3(w http.ResponseWriter, r *h
 		writeJSON(w, http.StatusOK, response)
 		return
 	}
-	response.Features = []string{playback.FeaturePlaybackPlanV3, playback.FeatureMedia3Only, playback.FeatureDetailedDecodeV3, playback.FeatureLayoutPassthrough, playback.FeatureRouteDiagnostics, playback.FeatureDeviceQuirksV3, playback.FeatureSeekReanchorV3}
+	response.Features = playback.ServerFeaturesV3()
 	response.Deliveries = []playback.DeliveryV3{playback.DeliveryOriginalHTTPV3, playback.DeliveryRemuxProgressiveV3, playback.DeliveryRemuxHLSV3, playback.DeliveryTranscodeHLSV3}
 	response.Transformations = h.transformationRegistryV3(r.Context()).Advertised()
 	writeJSON(w, http.StatusOK, response)
@@ -536,7 +536,7 @@ func (h *PlaybackHandler) startPlannedPlaybackV3(r *http.Request, userID int, pr
 		abort()
 		return playback.DecisionResponseV3{}, &transportErrorV3{reason: "subtitle_artifact_unavailable", message: "Failed to prepare the selected subtitle artifact.", cause: err}
 	}
-	response := playback.DecisionResponseV3{ProtocolVersion: playback.ProtocolV3, ServerFeatures: []string{playback.FeaturePlaybackPlanV3, playback.FeatureMedia3Only, playback.FeatureRouteDiagnostics, playback.FeatureDeviceQuirksV3, playback.FeatureSeekReanchorV3}, Outcome: playback.OutcomePlayableV3, SessionID: session.ID, PlaybackPlan: result.Plan}
+	response := playback.DecisionResponseV3{ProtocolVersion: playback.ProtocolV3, ServerFeatures: playback.ServerFeaturesV3(), Outcome: playback.OutcomePlayableV3, SessionID: session.ID, PlaybackPlan: result.Plan}
 	record := playback.AttemptRecordV3{PlaybackAttemptID: req.PlaybackAttemptID, SessionID: session.ID, UserID: userID, ProfileID: profileID, RequestedMediaFileID: requestedFile.ID, EffectiveMediaFileID: effectiveFile.ID, CurrentPlanID: result.Plan.PlanID, CurrentPlan: *result.Plan, NormalizedRequest: req, RequestDigest: requestDigest, ExpiresAt: time.Now().Add(playback.MaxTokenTTL)}
 	if err := h.updateV3SessionState(r.Context(), session, effectiveFile, result, transport); err != nil {
 		transport.rollback()
@@ -1270,7 +1270,7 @@ func (h *PlaybackHandler) executeReplanV3(r *http.Request, record *playback.Atte
 			}
 		}
 	}
-	response := playback.DecisionResponseV3{ProtocolVersion: playback.ProtocolV3, ServerFeatures: []string{playback.FeaturePlaybackPlanV3, playback.FeatureMedia3Only, playback.FeatureRouteDiagnostics, playback.FeatureDeviceQuirksV3, playback.FeatureSeekReanchorV3}, Outcome: playback.OutcomePlayableV3, SessionID: session.ID, PlaybackPlan: result.Plan}
+	response := playback.DecisionResponseV3{ProtocolVersion: playback.ProtocolV3, ServerFeatures: playback.ServerFeaturesV3(), Outcome: playback.OutcomePlayableV3, SessionID: session.ID, PlaybackPlan: result.Plan}
 	updated := *record
 	updated.CurrentPlanID = result.Plan.PlanID
 	updated.CurrentPlan = *result.Plan
@@ -1846,7 +1846,7 @@ func decisionResponseFromAttemptV3(record *playback.AttemptRecordV3) playback.De
 	if plan.RuntimeCorrections == nil {
 		plan.RuntimeCorrections = []string{}
 	}
-	return playback.DecisionResponseV3{ProtocolVersion: playback.ProtocolV3, ServerFeatures: []string{playback.FeaturePlaybackPlanV3, playback.FeatureMedia3Only, playback.FeatureRouteDiagnostics, playback.FeatureDeviceQuirksV3, playback.FeatureSeekReanchorV3}, Outcome: playback.OutcomePlayableV3, SessionID: record.SessionID, PlaybackPlan: &plan}
+	return playback.DecisionResponseV3{ProtocolVersion: playback.ProtocolV3, ServerFeatures: playback.ServerFeaturesV3(), Outcome: playback.OutcomePlayableV3, SessionID: record.SessionID, PlaybackPlan: &plan}
 }
 
 func completedReplanResponseMatchesAttemptV3(raw json.RawMessage, record *playback.AttemptRecordV3) bool {
@@ -2004,12 +2004,19 @@ func configureHLSTimelineV3(plan *playback.PlanV3, videoCodec string, segmentDur
 		plan.Timeline.TimelineOffsetSeconds = seek
 		windowStart := seek
 		plan.Timeline.SeekWindowStartSeconds = &windowStart
-		if durationSeconds > 0 {
-			windowEnd := durationSeconds
-			plan.Timeline.SeekWindowEndSeconds = &windowEnd
-		} else {
-			plan.Timeline.SeekWindowEndSeconds = nil
-		}
+		// A copy remux is served from FFmpeg's live, still-growing playlist
+		// (see BuildPlaybackManifest), so the seekable extent is whatever has
+		// been produced so far — a value this plan cannot know and could not
+		// keep current if it did. Publishing the media runtime here instead
+		// made the window look *complete*, which clients read as proof that
+		// any target inside it is locally seekable; they then native-seek past
+		// the produced head instead of asking for a reanchor. Leaving the end
+		// open marks the window incomplete, which with can_seek_anywhere=false
+		// routes every seek back through the server.
+		//
+		// The media runtime is published on source.duration_seconds, which is
+		// a fact about the file rather than a claim about this transport.
+		plan.Timeline.SeekWindowEndSeconds = nil
 		plan.Timeline.CanSeekAnywhere = false
 		plan.Timeline.SeekRestoration = "source_position"
 	} else {
