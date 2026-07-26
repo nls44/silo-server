@@ -163,6 +163,129 @@ func parseInferFolderTitleYear(name string) (string, int, bool) {
 	return strings.TrimSpace(surface), 0, false
 }
 
+// titleEditionNoiseRe matches trailing release/edition descriptor words that
+// scene-release folders append after the movie title (e.g. "UNRATED",
+// "LIMITED", "PROPER", "EXTENDED"). They describe the release, not the film,
+// so they are stripped from the derived search title. These are intentionally
+// distinct from the resolution/source/codec tokens in inferReleaseTokenRe,
+// which already terminate the title cutoff.
+var titleEditionNoiseRe = regexp.MustCompile(`(?i)^(?:unrated|uncut|uncensored|extended|remastered|restored|limited|proper|repack|internal|custom|hybrid|criterion|imax|theatrical|readnfo|fanedit)$`)
+
+func isTitleEditionNoise(token string) bool {
+	return titleEditionNoiseRe.MatchString(token)
+}
+
+// cleanReleaseFolderTitle recovers a human-readable title (and optional year)
+// from a scene-release style folder name such as
+// "Cloverfield.1080p.Bluray.x264-1920" or "Cloverfield.2008.1080p.BluRay".
+// Release noise — the trailing release group plus resolution/source/codec
+// tokens — is stripped. ok is true only when release tokens were actually
+// present and removed, so plain (non-release) folder names are returned
+// untouched and the caller can fall back to filename-derived identity.
+func cleanReleaseFolderTitle(folderName string) (title string, year int, ok bool) {
+	surface := stripInferProviderTags(folderName)
+	surface = strings.NewReplacer(".", " ", "_", " ").Replace(surface)
+	surface = collapseWhitespace(strings.TrimSpace(surface))
+	if surface == "" {
+		return "", 0, false
+	}
+
+	// Strip a trailing release group, e.g. "...x264-1920" -> "...x264".
+	stripped := stripVariantReleaseGroup(surface)
+	releaseGroupStripped := stripped != surface
+
+	tokens := strings.Fields(stripped)
+
+	// The title is everything before the first release token
+	// (resolution/source/codec). Require explicit release evidence — either a
+	// release token or a stripped release group — before trusting the folder.
+	cutoff := len(tokens)
+	for i, token := range tokens {
+		if inferReleaseTokenRe.MatchString(token) {
+			cutoff = i
+			break
+		}
+	}
+	if cutoff == 0 {
+		// The first token already looks like release noise; nothing to keep.
+		return "", 0, false
+	}
+	if cutoff == len(tokens) && !releaseGroupStripped {
+		return "", 0, false
+	}
+
+	titleTokens := tokens[:cutoff]
+
+	// The release year (if any) is the rightmost year-like token before the
+	// release block: "Cloverfield 2008 1080p" -> "Cloverfield" + 2008. It is
+	// only treated as a year when a title still precedes it, so a movie whose
+	// own name is a year ("2012.2009.1080p") keeps "2012" as the title.
+	for i := len(titleTokens) - 1; i > 0; i-- {
+		if y, valid := parseInferYearToken(titleTokens[i]); valid {
+			year = y
+			titleTokens = titleTokens[:i]
+			break
+		}
+	}
+
+	// Strip trailing release/edition descriptor words (e.g. "UNRATED",
+	// "LIMITED", "PROPER") left between the title and the release block.
+	for len(titleTokens) > 0 && isTitleEditionNoise(titleTokens[len(titleTokens)-1]) {
+		titleTokens = titleTokens[:len(titleTokens)-1]
+	}
+
+	title = collapseWhitespace(strings.Join(titleTokens, " "))
+	title = StripComparisonSafeEditionSuffix(title)
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", 0, false
+	}
+	return title, year, true
+}
+
+// ParseCleanReleaseFolderTitle is the exported form of cleanReleaseFolderTitle
+// for tests and external consumers.
+func ParseCleanReleaseFolderTitle(folderName string) (string, int, bool) {
+	return cleanReleaseFolderTitle(folderName)
+}
+
+// seasonEpisodeTokenRe matches a single token that encodes a season/episode
+// number in scene-release naming: "S01", "S1", "S01E12", "S03-S05". These
+// tokens describe the release scope, not the series title, so they are
+// stripped from the derived search title.
+var seasonEpisodeTokenRe = regexp.MustCompile(`(?i)^s\d{1,2}(?:-?(?:e\d{1,3}|s\d{1,2}))?$`)
+
+// cleanSeriesReleaseFolderTitle recovers a human-readable title (and optional
+// year) from a scene-release series folder such as
+// "Breaking.Bad.S01.1080p.BluRay.x264-GROUP". It delegates to
+// cleanReleaseFolderTitle to strip resolution/source/codec/release-group
+// noise and edition descriptors, then removes trailing season/episode tokens
+// ("S01", "S01E12") that survive the release-token cutoff.
+func cleanSeriesReleaseFolderTitle(folderName string) (title string, year int, ok bool) {
+	title, year, ok = cleanReleaseFolderTitle(folderName)
+	if !ok {
+		return "", 0, false
+	}
+	tokens := strings.Fields(title)
+	for len(tokens) > 0 && seasonEpisodeTokenRe.MatchString(tokens[len(tokens)-1]) {
+		tokens = tokens[:len(tokens)-1]
+	}
+	for len(tokens) > 0 && isTitleEditionNoise(tokens[len(tokens)-1]) {
+		tokens = tokens[:len(tokens)-1]
+	}
+	title = strings.TrimSpace(strings.Join(tokens, " "))
+	if title == "" {
+		return "", 0, false
+	}
+	return title, year, true
+}
+
+// ParseCleanSeriesReleaseFolderTitle is the exported form of
+// cleanSeriesReleaseFolderTitle for tests and external consumers.
+func ParseCleanSeriesReleaseFolderTitle(folderName string) (string, int, bool) {
+	return cleanSeriesReleaseFolderTitle(folderName)
+}
+
 func normalizeInferComparable(name string) string {
 	return strings.Join(normalizeInferTokens(name), " ")
 }

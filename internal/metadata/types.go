@@ -99,6 +99,10 @@ type MatchHints struct {
 	ObservedRootPath          string
 	AllGroupFilePaths         []string
 	PrimarySidecarSearchPaths []string
+	// AggressiveAutoMatch opts in to trusting the provider's top result on an
+	// exact normalized-title match even without a year hint or cross-source
+	// corroboration. Off by default (see selectInitialMatchCandidate).
+	AggressiveAutoMatch bool
 }
 
 // SearchQuery is passed to SearchProvider.Search().

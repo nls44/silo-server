@@ -463,6 +463,41 @@ func (r *MovieMatchQueueRepository) UpdateError(ctx context.Context, mediaFileID
 	return nil
 }
 
+// ResetBackoffByPathPrefix clears the retry backoff for every queued movie
+// file beneath pathPrefix in a folder: available_at is moved to NOW(),
+// last_attempted_at/attempt_count/last_error are cleared. Used by an explicit
+// "complete" item refresh so the forced re-match actually claims files that had
+// accumulated backoff from earlier failed attempts — otherwise the scoped
+// matcher's available_at <= NOW() gate skips them and the refresh is a no-op.
+func (r *MovieMatchQueueRepository) ResetBackoffByPathPrefix(ctx context.Context, folderID int, pathPrefix string) error {
+	if err := r.requireConfigured(); err != nil {
+		return err
+	}
+	if err := requirePositiveMovieQueueID("folder id", folderID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(pathPrefix) == "" {
+		return errors.New("path prefix is required")
+	}
+	pathPrefix = filepath.Clean(pathPrefix)
+	scopeLike := pathPrefixLike(pathPrefix)
+	if _, err := r.pool.Exec(ctx, `
+		UPDATE movie_match_queue q
+		SET available_at = NOW(),
+		    last_attempted_at = NULL,
+		    attempt_count = 0,
+		    last_error = '',
+		    updated_at = NOW()
+		FROM media_files mf
+		WHERE q.media_file_id = mf.id
+		  AND q.media_folder_id = $1
+		  AND (mf.file_path = $2 OR mf.file_path LIKE $3 ESCAPE '\')
+	`, folderID, pathPrefix, scopeLike); err != nil {
+		return fmt.Errorf("resetting movie match backoff in scope: %w", err)
+	}
+	return nil
+}
+
 func (r *MovieMatchQueueRepository) ListByFolder(ctx context.Context, folderID int, limit int, offset int) ([]models.MovieMatchQueueEntry, int, error) {
 	if err := r.requireConfigured(); err != nil {
 		return nil, 0, err

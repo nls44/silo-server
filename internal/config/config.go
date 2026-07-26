@@ -328,7 +328,8 @@ type PolicyConfig struct {
 
 // MetadataConfig holds metadata pipeline settings.
 type MetadataConfig struct {
-	CacheImages bool `yaml:"-"`
+	CacheImages         bool `yaml:"-"`
+	AggressiveAutoMatch bool `yaml:"-"`
 }
 
 // ClientIPConfig holds client IP resolution settings.

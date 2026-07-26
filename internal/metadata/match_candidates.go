@@ -564,6 +564,16 @@ func selectInitialMatchCandidate(hints *MatchHints, candidates []MatchCandidate,
 		return nil, false
 	}
 
+	// Aggressive auto-match (opt-in via MatchHints.AggressiveAutoMatch): trust
+	// the provider's top result unconditionally, only guarded by content-type
+	// to prevent cross-matching a movie with a same-named series. This mirrors
+	// the manual match UI where the first search result is correct the vast
+	// majority of the time.
+	if hints != nil && hints.AggressiveAutoMatch &&
+		candidateTypeMatchesHint(hints.Type, best.candidate.ContentType) {
+		return &best.candidate, true
+	}
+
 	if best.score < 55 {
 		return nil, false
 	}
@@ -689,18 +699,22 @@ func candidatePrimaryProvider(candidate MatchCandidate) string {
 // existing item's identity. idOverrides carries identity-hint values that won
 // the pre-search conflict policy (e.g. NFO <uniqueid> on a manual refresh)
 // and takes precedence over the stored ids for anchoring.
-func selectRefreshMatchCandidate(existing *models.MediaItem, idOverrides map[string]string, candidates []MatchCandidate) (*MatchCandidate, bool) {
+// aggressiveAutoMatch is forwarded so that a manual refresh on a skeleton item
+// (no stored provider IDs) accepts the provider's top result on an exact
+// normalized-title match, mirroring ModeInitialMatch.
+func selectRefreshMatchCandidate(existing *models.MediaItem, idOverrides map[string]string, candidates []MatchCandidate, aggressiveAutoMatch bool) (*MatchCandidate, bool) {
 	if existing == nil || len(candidates) == 0 {
 		return nil, false
 	}
 
 	hints := &MatchHints{
-		Title:  existing.Title,
-		Year:   existing.Year,
-		Type:   existing.Type,
-		TmdbID: existing.TmdbID,
-		TvdbID: existing.TvdbID,
-		ImdbID: existing.ImdbID,
+		Title:               existing.Title,
+		Year:                existing.Year,
+		Type:                existing.Type,
+		TmdbID:              existing.TmdbID,
+		TvdbID:              existing.TvdbID,
+		ImdbID:              existing.ImdbID,
+		AggressiveAutoMatch: aggressiveAutoMatch,
 	}
 	overrideHintIDs(hints, idOverrides)
 	return selectInitialMatchCandidate(hints, candidates, nil)

@@ -1331,6 +1331,11 @@ func main() {
 			}
 		}
 
+		metadataService.SetAutoMatchAggressive(cfg.Metadata.AggressiveAutoMatch)
+		configWatcher.OnChange(func(_, updated *config.Config) {
+			metadataService.SetAutoMatchAggressive(updated.Metadata.AggressiveAutoMatch)
+		})
+
 		matchWorker = metadata.NewMatchWorker(metadataService, deps.FileRepo, cfg.Matcher.Workers, cfg.Matcher.BatchSize, 30*time.Second)
 		mwForReload := matchWorker
 		configWatcher.OnChange(func(_, updated *config.Config) {
@@ -1474,6 +1479,12 @@ func main() {
 				deps.EventBus,
 				deps.RealtimeHub,
 			)
+			if movieQueueRepo != nil {
+				itemRefreshExecutor.SetMovieBackoffResetter(movieQueueRepo)
+			}
+			if seriesQueueRepo != nil {
+				itemRefreshExecutor.SetSeriesBackoffResetter(seriesQueueRepo)
+			}
 		}
 	}
 

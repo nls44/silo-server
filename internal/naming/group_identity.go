@@ -109,6 +109,12 @@ func populateMovieGroupIdentity(filePath string, assignment RootAssignment, idAn
 	baseNoExt := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	stem := parseInferMovieStem(baseNoExt, parentTitle, parentYear)
 
+	cleanedFolderTitle, cleanedFolderYear := "", 0
+	cleanedFolderOk := false
+	if !parentTrusted {
+		cleanedFolderTitle, cleanedFolderYear, cleanedFolderOk = cleanReleaseFolderTitle(filepath.Base(group.ObservedRootPath))
+	}
+
 	baseTitle := ""
 	baseYear := 0
 	confidence := "low"
@@ -119,6 +125,11 @@ func populateMovieGroupIdentity(filePath string, assignment RootAssignment, idAn
 		baseTitle = parentTitle
 		baseYear = parentYear
 		confidence = "high"
+	} else if cleanedFolderOk {
+		baseTitle = cleanedFolderTitle
+		baseYear = cleanedFolderYear
+		confidence = "medium"
+		reasons = append(reasons, "cleaned_release_folder")
 	}
 
 	if stem.Title != "" {
@@ -145,6 +156,12 @@ func populateMovieGroupIdentity(filePath string, assignment RootAssignment, idAn
 		}
 	}
 
+	// If the folder gave us a title but no year, borrow the year parsed from the
+	// filename stem when one is available (the file describes the same movie).
+	if stem.Year != 0 && baseYear == 0 && baseTitle != "" {
+		baseYear = stem.Year
+	}
+
 	if baseTitle == "" {
 		baseTitle = StripComparisonSafeEditionSuffix(assignment.Title)
 		baseYear = assignment.Year
@@ -168,27 +185,45 @@ func populateMovieGroupIdentity(filePath string, assignment RootAssignment, idAn
 	group.State = state
 	group.ContentGroupKey = makeContentGroupKey("movie", baseTitle, baseYear, parentDir, filePath)
 	group.EvidenceJSON, _ = json.Marshal(map[string]any{
-		"parent_title":      parentTitle,
-		"parent_year":       parentYear,
-		"parent_trusted":    parentTrusted,
-		"stem_title":        stem.Title,
-		"stem_year":         stem.Year,
-		"stem_remainder":    stem.Remainder,
-		"confidence":        group.Confidence,
-		"observed_root":     group.ObservedRootPath,
-		"reasons":           reasons,
-		"has_episode_shape": assignment.HasEpisodePattern,
+		"parent_title":         parentTitle,
+		"parent_year":          parentYear,
+		"parent_trusted":       parentTrusted,
+		"cleaned_folder_title": cleanedFolderTitle,
+		"cleaned_folder_year":  cleanedFolderYear,
+		"cleaned_folder_ok":    cleanedFolderOk,
+		"stem_title":           stem.Title,
+		"stem_year":            stem.Year,
+		"stem_remainder":       stem.Remainder,
+		"confidence":           group.Confidence,
+		"observed_root":        group.ObservedRootPath,
+		"reasons":              reasons,
+		"has_episode_shape":    assignment.HasEpisodePattern,
 	})
 }
 
 func populateSeriesGroupIdentity(filePath string, libraryType string, assignment RootAssignment, idAnchored bool, group *GroupIdentity) {
 	ctx := ResolvePathContext(filePath, libraryType)
+	folderBase := filepath.Base(group.ObservedRootPath)
+	observedTitle, observedYear, observedTrusted := parseInferFolderTitleYear(folderBase)
+
+	cleanedFolderTitle, cleanedFolderYear := "", 0
+	cleanedFolderOk := false
+	if !observedTrusted {
+		cleanedFolderTitle, cleanedFolderYear, cleanedFolderOk = cleanSeriesReleaseFolderTitle(folderBase)
+	}
+
 	title := assignment.Title
 	year := assignment.Year
 	state := "resolved"
 	reasons := []string{}
 	if ctx != nil {
-		if ctx.Title != "" {
+		if cleanedFolderOk && cleanedFolderTitle != "" {
+			title = cleanedFolderTitle
+			reasons = append(reasons, "cleaned_release_folder")
+			if cleanedFolderYear != 0 && year == 0 {
+				year = cleanedFolderYear
+			}
+		} else if ctx.Title != "" {
 			title = ctx.Title
 		}
 		if ctx.Year != 0 {
@@ -196,11 +231,9 @@ func populateSeriesGroupIdentity(filePath string, libraryType string, assignment
 		}
 	}
 	if title == "" {
-		folderTitle, folderYear, _ := parseInferFolderTitleYear(filepath.Base(group.ObservedRootPath))
-		title = folderTitle
-		year = folderYear
+		title = observedTitle
+		year = observedYear
 	}
-	observedTitle, observedYear, observedTrusted := parseInferFolderTitleYear(filepath.Base(group.ObservedRootPath))
 	if observedTrusted && observedTitle != "" && title != "" {
 		switch classifyTitleRelation(observedTitle, title) {
 		case titleRelationSoft:
@@ -252,15 +285,18 @@ func populateSeriesGroupIdentity(filePath string, libraryType string, assignment
 	group.State = state
 	group.ContentGroupKey = makeContentGroupKey("series", title, year, group.ObservedRootPath, filePath)
 	group.EvidenceJSON, _ = json.Marshal(map[string]any{
-		"title":               title,
-		"year":                year,
-		"observed_root":       group.ObservedRootPath,
-		"observed_title":      observedTitle,
-		"observed_year":       observedYear,
-		"observed_trusted":    observedTrusted,
-		"has_season_struct":   assignment.HasSeasonStructure,
-		"has_episode_pattern": assignment.HasEpisodePattern,
-		"reasons":             reasons,
+		"title":                title,
+		"year":                 year,
+		"observed_root":        group.ObservedRootPath,
+		"observed_title":       observedTitle,
+		"observed_year":        observedYear,
+		"observed_trusted":     observedTrusted,
+		"cleaned_folder_title": cleanedFolderTitle,
+		"cleaned_folder_year":  cleanedFolderYear,
+		"cleaned_folder_ok":    cleanedFolderOk,
+		"has_season_struct":    assignment.HasSeasonStructure,
+		"has_episode_pattern":  assignment.HasEpisodePattern,
+		"reasons":              reasons,
 	})
 }
 

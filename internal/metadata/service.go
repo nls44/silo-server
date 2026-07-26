@@ -314,15 +314,16 @@ type MetadataService struct {
 	observedLocationRepo    metadataObservedLocationRepo
 	dbPool                  *pgxpool.Pool
 
-	dedupLocks      keyedDedupLocks
-	onDemandRefresh keyedRefreshSet
-	seriesWorkMu    sync.Mutex
-	seriesWork      map[string]*seriesEpisodeWork
-	hooks           metadataServiceHooks
-	imageCacher     ImageCacher
-	imageCacheJobs  ImageCacheJobEnqueuer
-	autoCacheImages atomic.Bool // hot-reloaded from metadata.cache_images
-	imageResolver   interface {
+	dedupLocks          keyedDedupLocks
+	onDemandRefresh     keyedRefreshSet
+	seriesWorkMu        sync.Mutex
+	seriesWork          map[string]*seriesEpisodeWork
+	hooks               metadataServiceHooks
+	imageCacher         ImageCacher
+	imageCacheJobs      ImageCacheJobEnqueuer
+	autoCacheImages     atomic.Bool // hot-reloaded from metadata.cache_images
+	autoMatchAggressive atomic.Bool // hot-reloaded from metadata.aggressive_auto_match
+	imageResolver       interface {
 		ResolveImageURL(ctx context.Context, path string, variant string) string
 	}
 
@@ -460,6 +461,15 @@ func (s *MetadataService) SetImageCacheJobEnqueuer(enqueuer ImageCacheJobEnqueue
 // the configured image cacher when available. Safe for concurrent use.
 func (s *MetadataService) SetAutoCacheImages(enabled bool) {
 	s.autoCacheImages.Store(enabled)
+}
+
+// SetAutoMatchAggressive controls whether the initial matcher trusts the
+// provider's top result on an exact normalized-title match even without a year
+// hint or cross-source corroboration (mirrors the manual match UI). Off by
+// default. Safe for concurrent use; hot-reloaded from
+// metadata.aggressive_auto_match.
+func (s *MetadataService) SetAutoMatchAggressive(enabled bool) {
+	s.autoMatchAggressive.Store(enabled)
 }
 
 // SetImageResolver sets the resolver used to convert plugin-prefixed image
@@ -1257,6 +1267,9 @@ func (s *MetadataService) processInternal(ctx context.Context, req ProcessReques
 		for _, p := range itemChain {
 			providerPriority = append(providerPriority, p.Slug())
 		}
+		if selectionHints != nil {
+			selectionHints.AggressiveAutoMatch = s.autoMatchAggressive.Load()
+		}
 		if winner, ok := selectInitialMatchCandidate(selectionHints, candidates, providerPriority); ok && winner != nil {
 			for k, v := range winner.ProviderIDs {
 				if v != "" {
@@ -1361,7 +1374,7 @@ func (s *MetadataService) processInternal(ctx context.Context, req ProcessReques
 			}
 		}
 		candidates := NormalizeCandidates(allResults, contentType)
-		if winner, ok := selectRefreshMatchCandidate(existing, wonHints, candidates); ok && winner != nil {
+		if winner, ok := selectRefreshMatchCandidate(existing, wonHints, candidates, s.autoMatchAggressive.Load()); ok && winner != nil {
 			for k, v := range winner.ProviderIDs {
 				if v != "" {
 					accumulatedIDs[k] = v
@@ -2798,7 +2811,7 @@ func (s *MetadataService) resolveSeriesRefreshProviderIDs(ctx context.Context, s
 		}
 	}
 	candidates := NormalizeCandidates(allResults, series.Type)
-	if winner, ok := selectRefreshMatchCandidate(series, nil, candidates); ok && winner != nil {
+	if winner, ok := selectRefreshMatchCandidate(series, nil, candidates, s.autoMatchAggressive.Load()); ok && winner != nil {
 		for k, v := range winner.ProviderIDs {
 			if v != "" {
 				accumulatedIDs[k] = v

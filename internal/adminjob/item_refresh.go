@@ -111,6 +111,17 @@ type itemRefreshSkippedRootRepo interface {
 	DeleteMissingInScope(ctx context.Context, folderID int, scopePath string, seenRoots []string) error
 }
 
+// itemRefreshMatchBackoffResetter clears match-queue retry backoff for a scope,
+// so an explicit "complete" refresh forces a re-match of files that had
+// accumulated backoff from earlier failed attempts.
+type itemRefreshMatchBackoffResetter interface {
+	ResetBackoffByPathPrefix(ctx context.Context, folderID int, pathPrefix string) error
+}
+
+type itemRefreshSeriesBackoffResetter interface {
+	ResetBackoffByObservedRootPathPrefix(ctx context.Context, folderID int, rootPathPrefix string) error
+}
+
 type ItemRefreshResolver struct {
 	itemRepo    itemRefreshItemRepo
 	seasonRepo  itemRefreshSeasonRepo
@@ -417,15 +428,17 @@ type ItemRefreshIngester interface {
 }
 
 type ItemRefreshExecutor struct {
-	folderRepo      itemRefreshFolderRepo
-	fileRepo        itemRefreshFileRepo
-	rootClaimRepo   itemRefreshRootClaimRepo
-	groupClaimRepo  itemRefreshGroupClaimRepo
-	skippedRootRepo itemRefreshSkippedRootRepo
-	seasonRepo      itemRefreshSeasonRepo
-	episodeRepo     itemRefreshEpisodeRepo
-	ingester        ItemRefreshIngester
-	refresher       interface {
+	folderRepo            itemRefreshFolderRepo
+	fileRepo              itemRefreshFileRepo
+	rootClaimRepo         itemRefreshRootClaimRepo
+	groupClaimRepo        itemRefreshGroupClaimRepo
+	skippedRootRepo       itemRefreshSkippedRootRepo
+	movieBackoffResetter  itemRefreshMatchBackoffResetter
+	seriesBackoffResetter itemRefreshSeriesBackoffResetter
+	seasonRepo            itemRefreshSeasonRepo
+	episodeRepo           itemRefreshEpisodeRepo
+	ingester              ItemRefreshIngester
+	refresher             interface {
 		RefreshItem(ctx context.Context, contentID string) error
 		RefreshItemForLibrary(ctx context.Context, contentID string, folderID int) error
 		RefreshTargetForLibrary(ctx context.Context, targetType, contentID string, folderID int) error
@@ -464,6 +477,20 @@ func NewItemRefreshExecutor(
 		eventBus:        eventBus,
 		realtimeHub:     realtimeHub,
 	}
+}
+
+// SetMovieBackoffResetter installs the movie match-queue backoff resetter used by
+// complete item refreshes to force a retry of files stuck in backoff. Optional;
+// when unset, complete refreshes keep their prior behavior.
+func (e *ItemRefreshExecutor) SetMovieBackoffResetter(r itemRefreshMatchBackoffResetter) {
+	e.movieBackoffResetter = r
+}
+
+// SetSeriesBackoffResetter installs the series match-queue backoff resetter
+// used by complete item refreshes to force a retry of series roots stuck in
+// backoff. Optional; when unset, complete refreshes keep their prior behavior.
+func (e *ItemRefreshExecutor) SetSeriesBackoffResetter(r itemRefreshSeriesBackoffResetter) {
+	e.seriesBackoffResetter = r
 }
 
 func (e *ItemRefreshExecutor) Execute(ctx context.Context, req ItemRefreshRequest, progress func(current, total int, message string)) (*ItemRefreshResult, error) {
@@ -581,6 +608,21 @@ func (e *ItemRefreshExecutor) prepareCompleteRefresh(ctx context.Context, req It
 	}
 	if _, err := e.fileRepo.ClearContentLinksByPathPrefix(ctx, req.ScanFolderID, req.ScanPath); err != nil {
 		return fmt.Errorf("clearing content links: %w", err)
+	}
+	// An explicit complete refresh must force a re-match, so clear any retry
+	// backoff the files in scope accumulated from earlier failed attempts.
+	// Without this the scoped matcher's available_at <= NOW() gate skips them
+	// and the refresh silently matches nothing — the original bug where a
+	// "full refresh" on an already-failed item did not retry it.
+	if e.movieBackoffResetter != nil {
+		if err := e.movieBackoffResetter.ResetBackoffByPathPrefix(ctx, req.ScanFolderID, req.ScanPath); err != nil {
+			return fmt.Errorf("resetting match backoff: %w", err)
+		}
+	}
+	if e.seriesBackoffResetter != nil {
+		if err := e.seriesBackoffResetter.ResetBackoffByObservedRootPathPrefix(ctx, req.ScanFolderID, req.ScanPath); err != nil {
+			return fmt.Errorf("resetting series match backoff: %w", err)
+		}
 	}
 	return nil
 }

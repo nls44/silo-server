@@ -761,6 +761,7 @@ func TestSelectRefreshMatchCandidate_AcceptsCandidateWithPartialTrustedIDCoverag
 				Sources:     []string{"tmdb"},
 			},
 		},
+		false,
 	)
 	if !ok || winner == nil {
 		t.Fatalf("expected partial trusted-ID coverage candidate to be accepted")
@@ -786,6 +787,7 @@ func TestSelectRefreshMatchCandidate_RejectsCandidateWithoutTrustedIDMatches(t *
 				Sources:     []string{"tmdb"},
 			},
 		},
+		false,
 	)
 	if ok || winner != nil {
 		t.Fatalf("expected candidate without trusted-ID matches to be rejected")
@@ -811,8 +813,57 @@ func TestSelectRefreshMatchCandidate_RejectsConflictingTrustedIDCandidate(t *tes
 				Sources:     []string{"tmdb"},
 			},
 		},
+		false,
 	)
 	if ok || winner != nil {
 		t.Fatalf("expected conflicting trusted-ID candidate to be rejected")
+	}
+}
+
+func TestSelectRefreshMatchCandidate_AggressiveAutoMatchAcceptsSkeletonItem(t *testing.T) {
+	winner, ok := selectRefreshMatchCandidate(
+		&models.MediaItem{
+			Title: "X-Men Origins Wolverine",
+			Year:  0,
+			Type:  "movie",
+		},
+		nil,
+		[]MatchCandidate{
+			{
+				Title:       "X-Men Origins: Wolverine",
+				Year:        2009,
+				ContentType: "movie",
+				ProviderIDs: map[string]string{"tmdb": "2080"},
+				Sources:     []string{"tmdb"},
+			},
+		},
+		true,
+	)
+	if !ok || winner == nil {
+		t.Fatalf("expected aggressive auto-match to accept exact normalized title on skeleton item")
+	}
+}
+
+func TestSelectRefreshMatchCandidate_AggressiveAutoMatchDisabledRejectsLowScore(t *testing.T) {
+	winner, ok := selectRefreshMatchCandidate(
+		&models.MediaItem{
+			Title: "X-Men Origins Wolverine",
+			Year:  0,
+			Type:  "movie",
+		},
+		nil,
+		[]MatchCandidate{
+			{
+				Title:       "X-Men Origins: Wolverine",
+				Year:        2009,
+				ContentType: "movie",
+				ProviderIDs: map[string]string{"tmdb": "2080"},
+				Sources:     []string{"tmdb"},
+			},
+		},
+		false,
+	)
+	if ok || winner != nil {
+		t.Fatalf("expected rejection when aggressive auto-match is disabled and score < 70")
 	}
 }

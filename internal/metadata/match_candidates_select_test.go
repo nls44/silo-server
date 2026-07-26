@@ -172,3 +172,62 @@ func TestSelectInitialMatchCandidate_CrossSourceTieResolvedByProviderPriority(t 
 		t.Fatalf("expected nil-priority to still accept a match, got ok=%v cand=%+v", ok, got)
 	}
 }
+
+func TestSelectInitialMatchCandidate_AggressiveAcceptsExactTitleNoYear(t *testing.T) {
+	// With AggressiveAutoMatch enabled, the top result is accepted regardless
+	// of year or corroboration — mirrors the manual match UI.
+	hints := &MatchHints{Title: "Cloverfield", Type: "movie", AggressiveAutoMatch: true}
+	cands := []MatchCandidate{
+		{Title: "Cloverfield", Year: 2008, ContentType: "movie", Sources: []string{"tmdb"}, ProviderIDs: map[string]string{"tmdb": "500"}},
+	}
+	got, ok := selectInitialMatchCandidate(hints, cands, nil)
+	if !ok || got == nil || got.Title != "Cloverfield" {
+		t.Fatalf("expected aggressive match accepted, got ok=%v cand=%+v", ok, got)
+	}
+}
+
+func TestSelectInitialMatchCandidate_AggressiveAcceptsDifferentTitle(t *testing.T) {
+	// Aggressive mode trusts the provider's top result even when the title
+	// differs (e.g. "12 Monkeys" vs TMDB's "Twelve Monkeys").
+	hints := &MatchHints{Title: "12 Monkeys", Year: 1995, Type: "movie", AggressiveAutoMatch: true}
+	cands := []MatchCandidate{
+		{Title: "Twelve Monkeys", Year: 1995, ContentType: "movie", Sources: []string{"tmdb"}, ProviderIDs: map[string]string{"tmdb": "63"}},
+	}
+	got, ok := selectInitialMatchCandidate(hints, cands, nil)
+	if !ok || got == nil || got.Title != "Twelve Monkeys" {
+		t.Fatalf("expected aggressive match to accept different-title top result, got ok=%v cand=%+v", ok, got)
+	}
+}
+
+func TestSelectInitialMatchCandidate_AggressivePunctuationInsensitive(t *testing.T) {
+	hints := &MatchHints{Title: "Aliens vs Predator Requiem", Type: "movie", AggressiveAutoMatch: true}
+	cands := []MatchCandidate{
+		{Title: "Aliens vs Predator: Requiem", Year: 2007, ContentType: "movie", Sources: []string{"tmdb"}, ProviderIDs: map[string]string{"tmdb": "1145"}},
+	}
+	if got, ok := selectInitialMatchCandidate(hints, cands, nil); !ok || got == nil {
+		t.Fatalf("expected punctuation-variant exact title accepted under aggressive mode, got ok=%v", ok)
+	}
+}
+
+func TestSelectInitialMatchCandidate_AggressiveStillRejectsTypeMismatch(t *testing.T) {
+	// Aggressive mode must still respect the content-type guard.
+	hints := &MatchHints{Title: "The Tick", Type: "movie", AggressiveAutoMatch: true}
+	cands := []MatchCandidate{
+		{Title: "The Tick", Year: 2016, ContentType: "series", Sources: []string{"tmdb"}, ProviderIDs: map[string]string{"tmdb": "67133"}},
+	}
+	if got, ok := selectInitialMatchCandidate(hints, cands, nil); ok {
+		t.Fatalf("expected type-mismatch rejected even under aggressive mode, got cand=%+v", got)
+	}
+}
+
+func TestSelectInitialMatchCandidate_AggressiveOffRejectsNoYearExactTitle(t *testing.T) {
+	// Default (aggressive off): a no-year single-source exact-title match stays
+	// rejected — the safety guard the opt-in flag overrides.
+	hints := &MatchHints{Title: "Cloverfield", Type: "movie"}
+	cands := []MatchCandidate{
+		{Title: "Cloverfield", Year: 2008, ContentType: "movie", Sources: []string{"tmdb"}, ProviderIDs: map[string]string{"tmdb": "500"}},
+	}
+	if got, ok := selectInitialMatchCandidate(hints, cands, nil); ok {
+		t.Fatalf("expected no-year exact-title rejected with aggressive off, got cand=%+v", got)
+	}
+}

@@ -199,6 +199,30 @@ func (r *itemRefreshTestGroupClaimRepo) DeleteByFolderAndObservedPathPrefix(_ co
 	return nil
 }
 
+type itemRefreshTestBackoffResetter struct {
+	called   bool
+	folderID int
+	prefix   string
+
+	seriesCalled   bool
+	seriesFolderID int
+	seriesPrefix   string
+}
+
+func (r *itemRefreshTestBackoffResetter) ResetBackoffByPathPrefix(_ context.Context, folderID int, pathPrefix string) error {
+	r.called = true
+	r.folderID = folderID
+	r.prefix = pathPrefix
+	return nil
+}
+
+func (r *itemRefreshTestBackoffResetter) ResetBackoffByObservedRootPathPrefix(_ context.Context, folderID int, rootPathPrefix string) error {
+	r.seriesCalled = true
+	r.seriesFolderID = folderID
+	r.seriesPrefix = rootPathPrefix
+	return nil
+}
+
 type itemRefreshTestSkippedRootRepo struct {
 	skipped map[string]models.SkippedMediaRoot
 }
@@ -402,5 +426,72 @@ func TestItemRefreshExecutorCompleteRefreshRebuildsAndMapsEpisodeTarget(t *testi
 	}
 	if got, want := result.DetailContentID, "new-episode-id"; got != want {
 		t.Fatalf("result detail_content_id = %q, want %q", got, want)
+	}
+}
+
+// A complete item refresh must clear accumulated match-queue backoff for its
+// scope so the forced re-match actually claims files that had failed before.
+func TestItemRefreshExecutor_CompleteRefreshResetsMatchBackoff(t *testing.T) {
+	t.Parallel()
+
+	fileRepo := &itemRefreshTestFileRepo{}
+	rootClaimRepo := &itemRefreshTestRootClaimRepo{}
+	groupClaimRepo := &itemRefreshTestGroupClaimRepo{}
+	backoffResetter := &itemRefreshTestBackoffResetter{}
+
+	executor := &ItemRefreshExecutor{
+		fileRepo:              fileRepo,
+		rootClaimRepo:         rootClaimRepo,
+		groupClaimRepo:        groupClaimRepo,
+		movieBackoffResetter:  backoffResetter,
+		seriesBackoffResetter: backoffResetter,
+	}
+
+	if err := executor.prepareCompleteRefresh(
+		context.Background(),
+		ItemRefreshRequest{
+			ScanFolderID:      7,
+			ScanPath:          "/media/movies/Cloverfield.1080p.Bluray.x264-1920",
+			CanonicalRootPath: "/media/movies/Cloverfield.1080p.Bluray.x264-1920",
+		},
+	); err != nil {
+		t.Fatalf("prepareCompleteRefresh() error = %v", err)
+	}
+
+	if !backoffResetter.called {
+		t.Fatal("match backoff was not reset during complete refresh")
+	}
+	if got, want := backoffResetter.folderID, 7; got != want {
+		t.Fatalf("backoff reset folder_id = %d, want %d", got, want)
+	}
+	if got, want := backoffResetter.prefix, "/media/movies/Cloverfield.1080p.Bluray.x264-1920"; got != want {
+		t.Fatalf("backoff reset path_prefix = %q, want %q", got, want)
+	}
+	if !backoffResetter.seriesCalled {
+		t.Fatal("series match backoff was not reset during complete refresh")
+	}
+	if got, want := backoffResetter.seriesFolderID, 7; got != want {
+		t.Fatalf("series backoff reset folder_id = %d, want %d", got, want)
+	}
+	if got, want := backoffResetter.seriesPrefix, "/media/movies/Cloverfield.1080p.Bluray.x264-1920"; got != want {
+		t.Fatalf("series backoff reset root_path_prefix = %q, want %q", got, want)
+	}
+}
+
+// When no backoff resetter is wired, complete refresh must keep working
+// (optional dependency) and not panic.
+func TestItemRefreshExecutor_CompleteRefreshWithoutBackoffResetter(t *testing.T) {
+	t.Parallel()
+
+	executor := &ItemRefreshExecutor{
+		fileRepo:       &itemRefreshTestFileRepo{},
+		rootClaimRepo:  &itemRefreshTestRootClaimRepo{},
+		groupClaimRepo: &itemRefreshTestGroupClaimRepo{},
+	}
+	if err := executor.prepareCompleteRefresh(
+		context.Background(),
+		ItemRefreshRequest{ScanFolderID: 7, ScanPath: "/media/movies/X"},
+	); err != nil {
+		t.Fatalf("prepareCompleteRefresh() error = %v", err)
 	}
 }

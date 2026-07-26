@@ -560,6 +560,33 @@ func (r *SeriesRootMatchQueueRepository) UpdateError(ctx context.Context, folder
 	return nil
 }
 
+func (r *SeriesRootMatchQueueRepository) ResetBackoffByObservedRootPathPrefix(ctx context.Context, folderID int, rootPathPrefix string) error {
+	if err := r.requireConfigured(); err != nil {
+		return err
+	}
+	if err := requirePositiveSeriesQueueID("folder id", folderID); err != nil {
+		return err
+	}
+	if strings.TrimSpace(rootPathPrefix) == "" {
+		return errors.New("root path prefix is required")
+	}
+	rootPathPrefix = filepath.Clean(rootPathPrefix)
+	scopeLike := pathPrefixLike(rootPathPrefix)
+	if _, err := r.pool.Exec(ctx, `
+		UPDATE series_root_match_queue
+		SET available_at = NOW(),
+		    last_attempted_at = NULL,
+		    attempt_count = 0,
+		    last_error = '',
+		    updated_at = NOW()
+		WHERE media_folder_id = $1
+		  AND (observed_root_path = $2 OR observed_root_path LIKE $3 ESCAPE '\')
+	`, folderID, rootPathPrefix, scopeLike); err != nil {
+		return fmt.Errorf("resetting series root match backoff in scope: %w", err)
+	}
+	return nil
+}
+
 func (r *SeriesRootMatchQueueRepository) ListByFolder(ctx context.Context, folderID int, limit int, offset int) ([]models.SeriesRootMatchQueueEntry, int, error) {
 	if err := r.requireConfigured(); err != nil {
 		return nil, 0, err

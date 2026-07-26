@@ -314,6 +314,12 @@ func LoadFromDB(m map[string]string) (*Config, error) {
 	}
 	cfg.Metadata.CacheImages = cacheImages
 
+	aggressiveAutoMatch, err := boolOr(m, "metadata.aggressive_auto_match", false)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Metadata.AggressiveAutoMatch = aggressiveAutoMatch
+
 	// Playback
 	cfg.Playback.FFmpegPath = stringOr(m, "playback.ffmpeg_path", "/usr/lib/jellyfin-ffmpeg/ffmpeg")
 	cfg.Playback.TranscodeDir = stringOr(m, "playback.transcode_dir", DefaultTranscodeDir)
