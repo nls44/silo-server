@@ -921,6 +921,12 @@ func selectInitialMatchCandidate(hints *MatchHints, candidates []MatchCandidate,
 		scoredCandidates = eligible
 	}
 
+	if len(scoredCandidates) == 0 {
+		return nil, false
+	}
+
+	best := scoredCandidates[0]
+
 	// Aggressive auto-match (opt-in via MatchHints.AggressiveAutoMatch): trust
 	// the provider's top result unconditionally, only guarded by content-type
 	// to prevent cross-matching a movie with a same-named series. This mirrors
@@ -931,11 +937,6 @@ func selectInitialMatchCandidate(hints *MatchHints, candidates []MatchCandidate,
 		return &best.candidate, true
 	}
 
-	if len(scoredCandidates) == 0 {
-		return nil, false
-	}
-
-	best := scoredCandidates[0]
 	if best.score < automaticMatchAcceptanceFloor {
 		return nil, false
 	}

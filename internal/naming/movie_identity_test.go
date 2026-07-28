@@ -293,6 +293,27 @@ func TestParseCleanSeriesReleaseFolderTitle(t *testing.T) {
 			wantYear:  0,
 			wantOk:    false,
 		},
+		{
+			name:      "episode title after SxxExx truncated",
+			folder:    "12.Monkeys.S04E01.The.End.1080p.AMZN.WEB-DL.DDP5.1.H.264-NTG",
+			wantTitle: "12 Monkeys",
+			wantYear:  0,
+			wantOk:    true,
+		},
+		{
+			name:      "multi-word episode title truncated",
+			folder:    "American.Horror.Story.S09E07.The.Lady.in.White.720p.HDTV.x264-CRiMSON",
+			wantTitle: "American Horror Story",
+			wantYear:  0,
+			wantOk:    true,
+		},
+		{
+			name:      "release tag after SxxExx truncated",
+			folder:    "Friends.S01E01.WS.BDRip.XviD-iNGOT",
+			wantTitle: "Friends",
+			wantYear:  0,
+			wantOk:    true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

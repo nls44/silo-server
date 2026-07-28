@@ -24,10 +24,10 @@ var (
 	// separators: yyyy-MM-dd, yyyy.MM.dd, yyyy_MM_dd, or yyyy MM dd.
 	airDateRe = regexp.MustCompile(`(?:^|[^0-9])((?:19|20)\d{2})[-._ ]([01]\d)[-._ ]([0-3]\d)(?:[^0-9]|$)`)
 
-	// seasonDirRe matches "Season XX" directory names, optionally followed by
-	// trailing text (e.g. "Season 01 - Arc 01 - Romance Dawn"). The season
-	// number is captured in group 1.
-	seasonDirRe = regexp.MustCompile(`(?i)^Season\s+(\d{1,4})(?:\s.*)?$`)
+	// seasonDirRe matches "Season XX" or "SXX" directory names, optionally
+	// followed by trailing text (e.g. "Season 01 - Arc 01 - Romance Dawn").
+	// The season number is captured in group 1.
+	seasonDirRe = regexp.MustCompile(`(?i)^S(?:eason)?\s*(\d{1,4})(?:[ ._-].*)?$`)
 
 	// numericSeasonDirRe matches numeric-only season directories like "01".
 	numericSeasonDirRe = regexp.MustCompile(`^\d{1,4}$`)
@@ -35,11 +35,13 @@ var (
 	// specialsDirRe matches common specials/extras folders.
 	specialsDirRe = regexp.MustCompile(`(?i)^(?:specials?|extras?)$`)
 
-	// seasonReleaseDirRe recognizes release-pack directories such as
-	// "Show.Name.S01.2160p.WEB-DL-GROUP". These are season containers, not
-	// show roots; treating them as roots fragments one show into one metadata
-	// item per release directory and searches providers with the release name.
-	seasonReleaseDirRe  = regexp.MustCompile(`(?i)(?:^|[ ._-])s\d{1,4}(?:[ ._-]|$)`)
+	// seasonReleaseDirRe recognizes release directories such as season packs
+	// ("Show.Name.S01.2160p.WEB-DL-GROUP") and episode release folders
+	// ("Show.Name.S01E01.1080p.WEB.H264-GROUP"). These are release containers,
+	// not show roots; treating them as roots fragments one show into one
+	// metadata item per release directory and searches providers with the
+	// release name.
+	seasonReleaseDirRe  = regexp.MustCompile(`(?i)(?:^|[ ._-])s\d{1,4}(?:e\d{1,3})?(?:[ ._-]|$)`)
 	seasonReleaseTechRe = regexp.MustCompile(`(?i)(?:^|[ ._-])(?:2160p|1080p|720p|576p|480p|web(?:[ ._-]?dl|rip)?|blu[ ._-]?ray|bluray|hdtv|remux|x26[45]|h26[45]|hevc)(?:[ ._-]|$)`)
 )
 
@@ -103,10 +105,10 @@ func ResolvePathContext(filePath string, libraryType string) *PathContext {
 
 		if root, ok := deriveSeriesRoot(normalized, ctx.HasEpisodePattern, normalizedLibraryType == "series"); ok {
 			ctx.RootPath = root.RootPath
-			ctx.Title, ctx.Year = parseTitleYearCandidate(root.FolderName)
+			ctx.Title, ctx.Year = cleanFolderTitleOrDefault(root.FolderName)
 		} else if parentDir != "." && parentDir != "/" && parentDir != "" {
 			ctx.RootPath = parentDir
-			ctx.Title, ctx.Year = parseTitleYearCandidate(parentBase)
+			ctx.Title, ctx.Year = cleanFolderTitleOrDefault(parentBase)
 		}
 
 		if ctx.HasEpisodePattern {
@@ -280,6 +282,16 @@ func detectMovieFolderEvidence(parentBase string, nameNoExt string, hasSeasonStr
 
 func hasExplicitFolderIDs(name string) bool {
 	return ParseStructuredFolderIDs(name) != nil
+}
+
+// cleanFolderTitleOrDefault tries release-folder cleaning first (handles
+// scene-release names like "Show.Name.S01E01.1080p.WEB-GROUP"), then falls
+// back to a plain title/year parse for clean folder names.
+func cleanFolderTitleOrDefault(folderName string) (string, int) {
+	if cleaned, year, ok := cleanSeriesReleaseFolderTitle(folderName); ok {
+		return cleaned, year
+	}
+	return parseTitleYearCandidate(folderName)
 }
 
 func parseTitleYearCandidate(name string) (string, int) {

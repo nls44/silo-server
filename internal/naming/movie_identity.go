@@ -267,9 +267,17 @@ func cleanSeriesReleaseFolderTitle(folderName string) (title string, year int, o
 		return "", 0, false
 	}
 	tokens := strings.Fields(title)
-	for len(tokens) > 0 && seasonEpisodeTokenRe.MatchString(tokens[len(tokens)-1]) {
-		tokens = tokens[:len(tokens)-1]
+	// Truncate at the first season/episode token — everything from that token
+	// onward (episode title, extra release tags) is not part of the series
+	// title. Walking from the end only strips a trailing season token and
+	// leaves episode titles ("S04E01 The End") in place.
+	for i, token := range tokens {
+		if seasonEpisodeTokenRe.MatchString(token) {
+			tokens = tokens[:i]
+			break
+		}
 	}
+	// Strip trailing edition noise exposed beneath the truncation.
 	for len(tokens) > 0 && isTitleEditionNoise(tokens[len(tokens)-1]) {
 		tokens = tokens[:len(tokens)-1]
 	}
