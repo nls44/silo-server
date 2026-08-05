@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   BrowserRouter,
   Routes,
@@ -18,12 +18,14 @@ import { ThemeProvider } from "@/hooks/useTheme";
 import { DateTimeFormatProvider, useDateTimeFormat } from "@/hooks/useDateTimeFormat";
 import { CustomThemeProvider } from "@/contexts/CustomThemeProvider";
 import { BrandingProvider } from "@/contexts/BrandingProvider";
+import { UICustomizationProvider } from "@/contexts/UICustomizationProvider";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import ImpersonationBanner from "@/components/ImpersonationBanner";
 import { loadStoredImpersonationAdminSession } from "@/lib/impersonationSession";
 import { Toaster } from "@/components/ui/sonner";
 import { RealtimeEventsProvider } from "@/components/RealtimeEventsProvider";
 import { useEventChannel } from "@/components/realtimeEventsContext";
+import { useSettingValuesRealtime } from "@/hooks/queries/settingValues";
 import Layout from "@/components/Layout";
 import AdminLayout from "@/components/AdminLayout";
 import Home from "@/pages/Home";
@@ -40,6 +42,7 @@ import PersonDetail from "@/pages/PersonDetail";
 import Collections from "@/pages/Collections";
 import CollectionEditor from "@/pages/CollectionEditor";
 import Notifications from "@/pages/Notifications";
+import DeviceSettings from "@/pages/settings/DeviceSettings";
 import NotificationsSettings from "@/pages/settings/NotificationsSettings";
 import Requests from "@/pages/Requests";
 import RequestBrowse from "@/pages/RequestBrowse";
@@ -98,6 +101,7 @@ import ThemeEditorSettings from "@/pages/settings/ThemeEditorSettings";
 import CardOverlaySettings from "@/pages/settings/CardOverlaySettings";
 import PersonalizeSettings from "@/pages/settings/PersonalizeSettings";
 import ConnectAppsSettings from "@/pages/settings/ConnectAppsSettings";
+import InterfaceSettings from "@/pages/settings/InterfaceSettings";
 import WatchTogetherJoin from "@/pages/WatchTogetherJoin";
 import WatchTogetherRoomPage from "@/pages/WatchTogetherRoomPage";
 import WatchRoute from "@/pages/WatchRoute";
@@ -108,7 +112,6 @@ import {
   WatchPlaybackProvider,
 } from "@/playback/WatchPlaybackChrome";
 import { AudiobookPlaybackProvider } from "@/pages/audiobooks/player/audiobookPlaybackContext";
-import type { ReactNode } from "react";
 import {
   buildLegacyBrowseCatalogHref,
   buildPersonalCatalogHref,
@@ -373,6 +376,14 @@ function ReactiveAppRoutes() {
   return <AppRoutes />;
 }
 
+function UICustomizedLayout({ children }: { children: ReactNode }) {
+  return (
+    <UICustomizationProvider>
+      <Layout>{children}</Layout>
+    </UICustomizationProvider>
+  );
+}
+
 function AppRoutes() {
   return (
     <Routes>
@@ -460,14 +471,15 @@ function AppRoutes() {
                   path="/settings/*"
                   element={
                     <RequireProfile>
-                      <Layout>
+                      <UICustomizedLayout>
                         <SettingsLayout />
-                      </Layout>
+                      </UICustomizedLayout>
                     </RequireProfile>
                   }
                 >
-                  <Route index element={<Navigate to="playback" replace />} />
+                  <Route index element={null} />
                   <Route path="appearance" element={<AppearanceSettings />} />
+                  <Route path="interface" element={<InterfaceSettings />} />
                   <Route path="theme-editor" element={<ThemeEditorSettings />} />
                   <Route path="accessibility" element={<AccessibilitySettings />} />
                   <Route path="playback" element={<PlaybackSettings />} />
@@ -488,6 +500,7 @@ function AppRoutes() {
                   <Route path="home-screen" element={<HomeScreenSettings />} />
                   <Route path="card-overlays" element={<CardOverlaySettings />} />
                   <Route path="personalize" element={<PersonalizeSettings />} />
+                  <Route path="devices" element={<DeviceSettings />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
                   <Route path="connect-apps" element={<ConnectAppsSettings />} />
                   <Route path="*" element={<Navigate to="/settings/playback" replace />} />
@@ -496,7 +509,7 @@ function AppRoutes() {
                   path="/*"
                   element={
                     <RequireProfile>
-                      <Layout>
+                      <UICustomizedLayout>
                         <Routes>
                           <Route
                             path="/"
@@ -592,7 +605,7 @@ function AppRoutes() {
                           />
                           <Route path="*" element={<Navigate to="/" replace />} />
                         </Routes>
-                      </Layout>
+                      </UICustomizedLayout>
                     </RequireProfile>
                   }
                 />
@@ -610,6 +623,9 @@ function RealtimeEventChannels() {
 
   useEventChannel("catalog");
   useEventChannel("user_state");
+  // Subscribes user_settings and invalidates the canonical value queries, so a
+  // setting changed on another device (or by an admin) reaches this tab.
+  useSettingValuesRealtime();
   // Profile-scoped; the server rejects the subscription until the connection
   // is bound to a profile via the websocket ticket, which is harmless.
   useEventChannel("notifications");

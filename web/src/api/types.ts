@@ -2107,10 +2107,36 @@ export interface AutoscanSourcesResponse {
   sources: AutoscanSource[];
 }
 
+/** Whether a scan source needs upstream credentials to reach its provider. */
+export type AutoscanConnectionRequirement = "none" | "optional" | "required";
+
+/**
+ * The setup contract for one scan source, declared by its plugin manifest and
+ * resolved host-side. The Add-source flow builds its steps from this rather
+ * than branching on plugin ids, so a new plugin configures itself.
+ *
+ * The host always populates this, substituting defaults (poll + optional
+ * connection) for capabilities that declare nothing.
+ */
+export interface AutoscanScanSourceDescriptor {
+  delivery_modes: AutoscanDeliveryMode[];
+  connection: AutoscanConnectionRequirement;
+  connection_kinds?: string[];
+  /** Plugin already emits Silo-native paths, so path rewrites can be skipped. */
+  emits_native_paths?: boolean;
+  summary?: string;
+  icon_url?: string;
+  /** Per-source config fields, rendered by the shared plugin SchemaForm. */
+  config_form?: PluginAdminForm;
+}
+
 export interface AutoscanAvailableSource {
   plugin_id: string;
   capability_id: string;
   display_name: string;
+  description?: string;
+  /** Optional: an older server omits it, and descriptorFor falls back. */
+  descriptor?: AutoscanScanSourceDescriptor;
 }
 
 export interface AutoscanAvailableSourcesResponse {
@@ -2641,6 +2667,10 @@ export type EventChannel =
   | "scans"
   | "history_import"
   | "user_state"
+  // Per-account settings changed somewhere (another device, or an admin
+  // editing this account). Identity only, never a value — see
+  // useSettingValuesRealtime.
+  | "user_settings"
   | "settings"
   | "notifications";
 
@@ -2865,7 +2895,14 @@ export interface EventsHelloMessage {
   schema_version: number;
   connection_id: string;
   available_channels: EventChannel[];
-  required_action: "subscribe";
+  /**
+   * "none" when the connection already holds at least one subscription,
+   * declared as ?channels= on the URL. "subscribe" when it still owes a
+   * subscribe frame — including when it declared channels but none of them
+   * resolved, since such a connection is subscribed to nothing and is closed
+   * after the grace period like any other silent one.
+   */
+  required_action: "subscribe" | "none";
 }
 
 export interface EventsSubscribeMessage {
@@ -2954,6 +2991,24 @@ export interface AdminDeviceProfileSummary {
   profile_name: string;
   override_count: number;
   last_updated: string;
+}
+
+/** One device the signed-in viewer watches on. */
+export interface UserDevice {
+  device_id: string;
+  device_name: string;
+  device_platform: string;
+  last_seen_at: string;
+  profile_id: string;
+  profile_name: string;
+  /** True for the device this browser is. */
+  is_current_device: boolean;
+  /** How many settings this (profile, device) pair overrides. */
+  changed_count: number;
+}
+
+export interface UserDeviceListResponse {
+  devices: UserDevice[];
 }
 
 export interface AdminDeviceSummary {
@@ -3442,6 +3497,13 @@ export interface PluginAdminFormField {
   show_when?: PluginAdminFormCondition[];
   validation?: PluginAdminFormValidation;
   exclusive_group_field?: string;
+  /**
+   * Names a host-known value this field can be populated from in one click.
+   * Used by autoscan source config so a path field can be filled from Silo's
+   * own library paths without the UI knowing which plugin owns it. Unknown
+   * values render no action.
+   */
+  fill_from?: string;
 }
 
 export interface PluginCapability {
@@ -3704,16 +3766,6 @@ export interface UserLibrary {
   type: string;
   sort_order: number;
   poster_url?: string;
-}
-
-export interface LibraryPlaybackPreference {
-  profile_id: string;
-  library_id: number;
-  audio_language?: string;
-  subtitle_language?: string;
-  subtitle_mode?: string;
-  show_forced_subtitles?: boolean;
-  updated_at?: string;
 }
 
 // Progress entry from GET /progress
@@ -4129,6 +4181,7 @@ export interface CreateInvitationRequest {
 export interface SendInvitationResponse {
   invitation: Invitation;
   email_sent: boolean;
+  /** Only readable in this response — the server stores just the token hash. */
   claim_url?: string;
 }
 
