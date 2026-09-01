@@ -15,6 +15,27 @@ import (
 	"time"
 )
 
+func TestClassifyOutcome(t *testing.T) {
+	tests := []struct {
+		name          string
+		firstWriteErr error
+		contextErr    error
+		want          StreamOutcome
+	}{
+		{name: "completed", want: OutcomeCompleted},
+		{name: "stalled write", firstWriteErr: os.ErrDeadlineExceeded, want: OutcomeStalledReap},
+		{name: "write failure", firstWriteErr: io.ErrClosedPipe, want: OutcomeClientGone},
+		{name: "canceled context", contextErr: context.Canceled, want: OutcomeClientGone},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ClassifyOutcome(test.firstWriteErr, test.contextErr); got != test.want {
+				t.Fatalf("ClassifyOutcome() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 // TestStreamSurvivesServerWriteTimeout is the regression test for the 120s
 // stream-truncation bug: a response that keeps making progress must outlive
 // the server's absolute WriteTimeout when wrapped.
@@ -268,6 +289,42 @@ func TestServeContentReadFromOutcomeCompletedAndCounted(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("handler did not complete")
+	}
+}
+
+func TestCompletedFullResponse(t *testing.T) {
+	const body = "complete segment"
+	tests := []struct {
+		name             string
+		rangeHeader      string
+		method           string
+		cancelAfterWrite bool
+		want             bool
+	}{
+		{name: "ordinary get", method: http.MethodGet, want: true},
+		{name: "completed get with canceled context", method: http.MethodGet, cancelAfterWrite: true, want: true},
+		{name: "open ended full range", method: http.MethodGet, rangeHeader: "bytes=0-", want: true},
+		{name: "explicit full range", method: http.MethodGet, rangeHeader: "bytes=0-15", want: true},
+		{name: "partial range", method: http.MethodGet, rangeHeader: "bytes=1-", want: false},
+		{name: "head", method: http.MethodHead, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			sw := newRollingDeadlineWriter(rr, time.Second, 0)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			req := httptest.NewRequest(tt.method, "/segment.ts", nil).WithContext(ctx)
+			req.Header.Set("Range", tt.rangeHeader)
+			http.ServeContent(sw, req, "segment.ts", time.Time{}, strings.NewReader(body))
+			if tt.cancelAfterWrite {
+				cancel()
+			}
+			if got := sw.CompletedFullResponse(int64(len(body))); got != tt.want {
+				t.Fatalf("CompletedFullResponse = %v, want %v (status=%d range=%q bytes=%d)",
+					got, tt.want, sw.StatusCode(), rr.Header().Get("Content-Range"), sw.BytesWritten())
+			}
+		})
 	}
 }
 
