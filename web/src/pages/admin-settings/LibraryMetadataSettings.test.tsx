@@ -169,6 +169,9 @@ describe("LibraryMetadataSettings", () => {
         "matcher.workers",
         "matcher.batch_size",
         "metadata.image_workers",
+        "metadata.aggressive_auto_match",
+        "scanner.workers",
+        "matcher.workers",
         "markers.mode",
         "markers.lazy_playback",
         "markers.online_storage",
@@ -186,6 +189,12 @@ describe("LibraryMetadataSettings", () => {
     expect(keys).not.toContain("catalog.search.meilisearch.binary_quantized");
     expect(keys).not.toContain("catalog.search.meilisearch.rebuild_batch_size");
     expect(keys).toContain("scanner.realtime_monitoring");
+  });
+
+  it("renders the aggressive matching control when scanning settings are open", () => {
+    const rendered = text(render({}, ["metadata.aggressive_auto_match"]));
+
+    expect(rendered).toContain("Prefer the top metadata match");
   });
 
   it("reflects a stored off value for real-time monitoring", () => {

@@ -445,8 +445,16 @@ func detectInferMovieFolderEvidence(parentBase string, nameNoExt string, hasSeas
 			return false
 		}
 	}
-	parentTitle, parentYear, trusted := parseInferFolderTitleYear(parentBase)
-	if parentTitle == "" || (!trusted && parentYear == 0) {
+	parentTitle, parentYear, parentTrusted := parseInferFolderTitleYear(parentBase)
+	if !parentTrusted {
+		cleanedTitle, cleanedYear, cleanedOK := cleanReleaseFolderTitle(parentBase)
+		if !cleanedOK {
+			return false
+		}
+		parentTitle = cleanedTitle
+		parentYear = cleanedYear
+	}
+	if parentTitle == "" {
 		return false
 	}
 	fileStem := parseInferMovieStem(nameNoExt, parentTitle, parentYear)

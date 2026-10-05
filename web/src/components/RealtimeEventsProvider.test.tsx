@@ -260,6 +260,102 @@ describe("RealtimeEventsProvider", () => {
     });
   });
 
+  it("refreshes unmatched items when a library scan completes", async () => {
+    const queryClient = new QueryClient();
+    const unmatchedKey = adminKeys.unmatchedItems("");
+    queryClient.setQueryData(unmatchedKey, { items: [], total: 0 });
+    queryClient.setQueryData(adminKeys.libraries(), []);
+    queryClient.setQueryData(adminKeys.libraryMatchQueueStatuses(), []);
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RealtimeEventsProvider>
+          <div />
+        </RealtimeEventsProvider>
+      </QueryClientProvider>,
+    );
+
+    act(() => {
+      FakeWebSocket.instances[0]?.emitMessage({
+        type: "event",
+        channel: "scans",
+        event: "scan.completed",
+        data: {
+          id: "scan-1",
+          library_id: 1,
+          status: "completed",
+        },
+      });
+    });
+    await Promise.resolve();
+
+    expect(queryClient.getQueryState(unmatchedKey)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(adminKeys.libraries())?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(adminKeys.libraryMatchQueueStatuses())?.isInvalidated).toBe(
+      true,
+    );
+  });
+
+  it("ignores stale close events from intentionally closed sockets", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <RealtimeEventsProvider>
+          <div />
+        </RealtimeEventsProvider>
+      </QueryClientProvider>,
+    );
+
+    await act(async () => {});
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(FakeWebSocket.instances[0]?.protocols).toEqual([
+      "silo.events.v2",
+      `silo.ticket.${"a".repeat(43)}`,
+    ]);
+    const firstSocket = FakeWebSocket.instances[0];
+
+    await act(async () => {
+      mockState.pageActivity = {
+        ...mockState.pageActivity,
+        canApplyRealtimeUpdates: false,
+      };
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <RealtimeEventsProvider>
+            <div />
+          </RealtimeEventsProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    await act(async () => {
+      mockState.pageActivity = {
+        ...mockState.pageActivity,
+        canApplyRealtimeUpdates: true,
+      };
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <RealtimeEventsProvider>
+            <div />
+          </RealtimeEventsProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    await act(async () => {
+      firstSocket?.emitClose();
+      vi.advanceTimersByTime(1_000);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
   it("reconnects on same-profile PIN replacement and rejects old socket frames", async () => {
     setProfileId("profile-1");
     mockState.profile = { id: "profile-1", has_pin: false };

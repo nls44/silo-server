@@ -224,6 +224,34 @@ func (w *MatchWorker) processBackgroundMovieQueue(ctx context.Context) {
 	}
 }
 
+func (w *MatchWorker) restoreProvisionalIdentity(ctx context.Context, skeleton *skeletonResult) {
+	if w == nil || w.service == nil || w.service.itemRepo == nil || skeleton == nil ||
+		strings.TrimSpace(skeleton.ContentID) == "" || strings.TrimSpace(skeleton.Title) == "" {
+		return
+	}
+	item, err := w.service.itemRepo.GetByID(ctx, skeleton.ContentID)
+	if err != nil || item == nil || !isProvisionalOwnershipStatus(item.Status) {
+		return
+	}
+	changed := item.Title != skeleton.Title
+	if changed {
+		item.Title = skeleton.Title
+	}
+	if skeleton.Year != 0 && item.Year != skeleton.Year {
+		item.Year = skeleton.Year
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	if err := w.service.itemRepo.Upsert(ctx, item); err != nil {
+		slog.WarnContext(ctx, "metadata: failed to restore provisional item identity", "component", "metadata",
+			"content_id", skeleton.ContentID,
+			"error", err,
+		)
+	}
+}
+
 func (w *MatchWorker) processFile(ctx context.Context, file *models.MediaFile) {
 	if w.fileLister != nil {
 		defer func() {
@@ -288,6 +316,7 @@ func (w *MatchWorker) processFileWithFolderCache(ctx context.Context, file *mode
 	if err != nil {
 		slog.WarnContext(ctx, "metadata: enrichment failed", "component", "metadata",
 			"file_id", file.ID, "path", file.FilePath, "error", err)
+		w.restoreProvisionalIdentity(ctx, skeleton)
 		w.logStatusUpdateFailure(ctx, skeleton.ContentID, "unmatched", "content_id", skeleton.ContentID, "file_id", file.ID, "path", file.FilePath)
 		// For series items, synthesize fallback episode structure so episodes
 		// are visible even when no provider match was found.
@@ -301,6 +330,7 @@ func (w *MatchWorker) processFileWithFolderCache(ctx context.Context, file *mode
 	}
 
 	if result != nil && !result.Updated {
+		w.restoreProvisionalIdentity(ctx, skeleton)
 		w.logStatusUpdateFailure(ctx, skeleton.ContentID, "unmatched", "content_id", skeleton.ContentID, "file_id", file.ID, "path", file.FilePath)
 		// Same fallback synthesis for series when no provider data was returned.
 		if skeleton.Type == "series" {
@@ -881,6 +911,7 @@ func (w *MatchWorker) processQueuedMovieFile(ctx context.Context, job models.Mov
 				"path", file.FilePath,
 				"error", processErr,
 			)
+			w.restoreProvisionalIdentity(ctx, skeleton)
 			w.logStatusUpdateFailure(ctx, skeleton.ContentID, "unmatched", "content_id", skeleton.ContentID, "file_id", file.ID, "path", file.FilePath)
 			return false
 		} else if result != nil && !result.Updated && !result.Pinned {
@@ -891,6 +922,7 @@ func (w *MatchWorker) processQueuedMovieFile(ctx context.Context, job models.Mov
 					"error", updateErr,
 				)
 			}
+			w.restoreProvisionalIdentity(ctx, skeleton)
 			w.logStatusUpdateFailure(ctx, skeleton.ContentID, "unmatched", "content_id", skeleton.ContentID, "file_id", file.ID, "path", file.FilePath)
 			return false
 		} else if result == nil || !result.Pinned {
@@ -1030,6 +1062,26 @@ func (w *MatchWorker) reusableQueuedMovieSkeleton(ctx context.Context, file *mod
 	if currentFile.BaseType != "" {
 		itemType = currentFile.BaseType
 	}
+	if isProvisionalOwnershipStatus(status) {
+		identityChanged := false
+		if title != "" && item.Title != title {
+			item.Title = title
+			identityChanged = true
+		}
+		if item.Year != year && (currentFile.BaseYear != 0 || item.Year == 0) {
+			item.Year = year
+			identityChanged = true
+		}
+		if identityChanged {
+			if err := w.service.itemRepo.Upsert(ctx, item); err != nil {
+				slog.WarnContext(ctx, "metadata: failed to refresh provisional item identity", "component", "metadata",
+					"content_id", item.ContentID,
+					"file_id", file.ID,
+					"error", err,
+				)
+			}
+		}
+	}
 
 	refreshedIDs := trustedStructuredIDsForSkeleton(file.FilePath, observedRootPath, rootPath, libraryRoots...)
 	// This is an unmatched-style skeleton being re-evaluated. Structured path
@@ -1161,6 +1213,43 @@ func (w *MatchWorker) itemOwnsContentGroup(ctx context.Context, file *models.Med
 	return true, nil
 }
 
+// provisionalMovieSkeletonForContent refreshes a reusable movie or series
+// skeleton from the current persisted media-file path. Scoped unmatched
+// retries only carry a content ID, so they need this same scanner identity
+// repair as queue retries.
+func (w *MatchWorker) provisionalMovieSkeletonForContent(ctx context.Context, contentID string, folderID int) *skeletonResult {
+	if w == nil || w.service == nil || w.service.itemRepo == nil || w.service.fileRepo == nil {
+		return nil
+	}
+	item, err := w.service.itemRepo.GetByID(ctx, contentID)
+	if err != nil || item == nil {
+		return nil
+	}
+	itemType := strings.ToLower(strings.TrimSpace(item.Type))
+	if !isProvisionalOwnershipStatus(item.Status) ||
+		(itemType != "movie" && itemType != "series") {
+		return nil
+	}
+	lister, ok := w.service.fileRepo.(metadataContentFileLister)
+	if !ok {
+		return nil
+	}
+	files, err := lister.GetByContentID(ctx, contentID)
+	if err != nil {
+		return nil
+	}
+	for _, file := range files {
+		if file == nil || (folderID > 0 && file.MediaFolderID != folderID) {
+			continue
+		}
+		file.ContentID = contentID
+		if skeleton, ok := w.reusableQueuedMovieSkeleton(ctx, file, false); ok {
+			return skeleton
+		}
+	}
+	return nil
+}
+
 // reparseQueuedFileIdentity refreshes the in-memory scanner identity from the
 // current path without mutating the persisted scan row. Queue entries can live
 // across parser releases, including entries that have not created a skeleton
@@ -1174,6 +1263,24 @@ func reparseQueuedFileIdentity(file *models.MediaFile, fallbackType string, libr
 	if parseType == "" {
 		parseType = strings.TrimSpace(current.BaseType)
 	}
+	// Use the same root/group inference as the scanner. ParseFilename only
+	// understands the legacy file/folder relationship and treats filenames such
+	// as "1920-cloverfield.mkv" as the title, even when the enclosing release
+	// folder identifies the movie.
+	cleanPath := filepath.Clean(current.FilePath)
+	_, assignments := naming.InferRootAssignments([]string{cleanPath}, parseType, current.MediaFolderID, nil, libraryRoots...)
+	if assignment, ok := assignments[cleanPath]; ok {
+		group := naming.InferGroupIdentity(cleanPath, parseType, assignment)
+		if group.BaseTitle != "" {
+			current.BaseTitle = group.BaseTitle
+		}
+		current.BaseYear = group.BaseYear
+		if group.BaseType != "" {
+			current.BaseType = group.BaseType
+		}
+		return &current
+	}
+
 	if parsed := naming.ParseFilename(current.FilePath, parseType, libraryRoots...); parsed != nil {
 		if parsed.Title != "" {
 			current.BaseTitle = parsed.Title
@@ -1352,6 +1459,8 @@ func (w *MatchWorker) processSeriesRoot(ctx context.Context, job models.SeriesRo
 				req := w.buildProcessRequestForGroup(ctx, representative, skeleton, groupFiles, folder.paths...)
 				result, processErr := w.service.Process(ctx, req)
 				if processErr != nil {
+					w.restoreProvisionalIdentity(ctx, skeleton)
+
 					queueErr := truncateSeriesQueueError(processErr.Error())
 					if updateErr := w.seriesClaimer.UpdateError(ctx, job.MediaFolderID, job.ObservedRootPath, job.LeaseToken, queueErr); updateErr != nil {
 						return 0, updateErr
@@ -1373,6 +1482,7 @@ func (w *MatchWorker) processSeriesRoot(ctx context.Context, job models.SeriesRo
 				if result != nil && result.Pinned {
 					w.synthesizePinnedSeriesEpisodes(ctx, skeleton.ContentID)
 				} else if result != nil && !result.Updated {
+					w.restoreProvisionalIdentity(ctx, skeleton)
 					if updateErr := w.updateSeriesFailure(ctx, job.MediaFolderID, job.ObservedRootPath, job.LeaseToken, result.Decision); updateErr != nil {
 						return 0, updateErr
 					}
@@ -1914,6 +2024,7 @@ func (w *MatchWorker) RetryUnmatchedItemsByFolderAndPathPrefix(ctx context.Conte
 		}
 
 		retried++
+		skeleton := w.provisionalMovieSkeletonForContent(ctx, contentID, folderID)
 		result, processErr := w.service.Process(ctx, ProcessRequest{
 			ContentID: contentID,
 			FolderID:  formatFolderID(folderID),
@@ -1921,6 +2032,7 @@ func (w *MatchWorker) RetryUnmatchedItemsByFolderAndPathPrefix(ctx context.Conte
 		})
 		if processErr != nil {
 			stillUnmatched++
+			w.restoreProvisionalIdentity(ctx, skeleton)
 			slog.WarnContext(ctx, "metadata: scoped retry failed", "component", "metadata",
 				"content_id", contentID,
 				"folder_id", folderID,
@@ -1930,6 +2042,7 @@ func (w *MatchWorker) RetryUnmatchedItemsByFolderAndPathPrefix(ctx context.Conte
 		}
 		if result == nil || !result.Updated {
 			stillUnmatched++
+			w.restoreProvisionalIdentity(ctx, skeleton)
 			continue
 		}
 		w.publishCatalogItemChanged(ctx, folderID, resultContentID(result, contentID), "metadata_updated")

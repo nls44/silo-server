@@ -337,6 +337,7 @@ function applyScanUpdate(queryClient: QueryClient, scan: ScanRun, eventName: str
   ) {
     void queryClient.invalidateQueries({ queryKey: adminKeys.libraries() });
     void queryClient.invalidateQueries({ queryKey: adminKeys.libraryMatchQueueStatuses() });
+    void queryClient.invalidateQueries({ queryKey: adminKeys.unmatchedItems() });
   }
 }
 

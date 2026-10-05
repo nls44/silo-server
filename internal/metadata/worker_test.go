@@ -1075,6 +1075,210 @@ func TestWorkerProcessAllByFolderAndPathPrefix_MovieQueueFailureKeepsQueueRow(t 
 		t.Fatalf("item.Status = %q, want unmatched", item.Status)
 	}
 }
+func TestWorkerMovieQueueRestoresProvisionalIdentityAfterFailedMatch(t *testing.T) {
+	t.Parallel()
+	h := newTestHarness()
+	ctx := context.Background()
+	h.service.folderRepo = &fakeWorkerFolderRepo{
+		folders: map[int]*models.MediaFolder{
+			10: {ID: 10, Type: "movies", Enabled: true},
+		},
+	}
+
+	const contentID = "local-cloverfield-failed-match"
+	if err := h.itemRepo.Upsert(ctx, &models.MediaItem{
+		ContentID: contentID,
+		Status:    "unmatched",
+		Title:     "1920-cloverfield",
+		Type:      "movie",
+		Studios:   []string{},
+		Networks:  []string{},
+		Countries: []string{},
+		Genres:    []string{},
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+	file := &models.MediaFile{
+		ID:            1,
+		MediaFolderID: 10,
+		ContentID:     contentID,
+		FilePath:      "/media/movies/Cloverfield.1080p.Bluray.x264-1920/1920-cloverfield.mkv",
+		BaseTitle:     "1920-cloverfield",
+		BaseType:      "movie",
+	}
+	movieQueueRepo := newFakeMovieQueueRepo(file)
+	h.service.hooks.process = func(_ context.Context, req ProcessRequest) (*ProcessResult, error) {
+		if req.Hints == nil || req.Hints.Title != "Cloverfield" {
+			t.Fatalf("process hints = %#v, want clean Cloverfield identity", req.Hints)
+		}
+		item, err := h.itemRepo.GetByID(ctx, contentID)
+		if err != nil {
+			t.Fatalf("load item in process hook: %v", err)
+		}
+		item.Title = "1920-cloverfield"
+		item.Year = 0
+		if err := h.itemRepo.Upsert(ctx, item); err != nil {
+			t.Fatalf("simulate failed-match persistence: %v", err)
+		}
+		return &ProcessResult{Updated: false}, nil
+	}
+
+	worker := NewMatchWorker(h.service, h.fileRepo, 1, 1, 0)
+	worker.SetMovieFileClaimer(movieQueueRepo)
+	if _, err := worker.ProcessAllByFolderAndPathPrefix(ctx, 10, "/media/movies/Cloverfield.1080p.Bluray.x264-1920", time.Time{}); err != nil {
+		t.Fatalf("ProcessAllByFolderAndPathPrefix error = %v", err)
+	}
+	item, err := h.itemRepo.GetByID(ctx, contentID)
+	if err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if item.Title != "Cloverfield" {
+		t.Fatalf("provisional title = %q, want Cloverfield", item.Title)
+	}
+}
+
+type fakeScopedUnmatchedItemLister struct {
+	contentIDs []string
+}
+
+func (l *fakeScopedUnmatchedItemLister) ListUnmatchedByFolderAndPathPrefix(
+	_ context.Context,
+	_ int,
+	_ string,
+	_ int,
+) ([]string, error) {
+	return append([]string(nil), l.contentIDs...), nil
+}
+
+func TestWorkerScopedRetryRestoresProvisionalMovieIdentity(t *testing.T) {
+	h := newTestHarness()
+	ctx := context.Background()
+	const contentID = "local-cloverfield-scoped-retry"
+	if err := h.itemRepo.Upsert(ctx, &models.MediaItem{
+		ContentID: contentID,
+		Status:    "unmatched",
+		Title:     "1920-cloverfield",
+		Type:      "movie",
+		Studios:   []string{},
+		Networks:  []string{},
+		Countries: []string{},
+		Genres:    []string{},
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+	file := &models.MediaFile{
+		ID:            1,
+		MediaFolderID: 10,
+		ContentID:     contentID,
+		FilePath:      "/media/movies/Cloverfield.1080p.Bluray.x264-1920/1920-cloverfield.mkv",
+		BaseTitle:     "1920-cloverfield",
+		BaseType:      "movie",
+	}
+	h.fileRepo.setGroupFiles(10, 1, "v1|movie|cloverfield|0", file)
+	h.fileRepo.contentIDs[file.ID] = contentID
+	h.service.hooks.process = func(_ context.Context, req ProcessRequest) (*ProcessResult, error) {
+		if req.Mode != ModeScheduledRefresh {
+			t.Fatalf("process mode = %v, want scheduled refresh", req.Mode)
+		}
+		item, err := h.itemRepo.GetByID(ctx, contentID)
+		if err != nil {
+			t.Fatalf("load item in process hook: %v", err)
+		}
+		if item.Title != "Cloverfield" {
+			t.Fatalf("pre-refresh provisional title = %q, want Cloverfield", item.Title)
+		}
+		item.Title = "1920-cloverfield"
+		item.Year = 0
+		if err := h.itemRepo.Upsert(ctx, item); err != nil {
+			t.Fatalf("simulate failed-match persistence: %v", err)
+		}
+		return &ProcessResult{Updated: false}, nil
+	}
+
+	worker := NewMatchWorker(h.service, h.fileRepo, 1, 1, 0)
+	worker.itemLister = &fakeScopedUnmatchedItemLister{contentIDs: []string{contentID}}
+	retried, stillUnmatched, err := worker.RetryUnmatchedItemsByFolderAndPathPrefix(
+		ctx, 10, "/media/movies/Cloverfield.1080p.Bluray.x264-1920",
+	)
+	if err != nil {
+		t.Fatalf("scoped retry error = %v", err)
+	}
+	if retried != 1 || stillUnmatched != 1 {
+		t.Fatalf("scoped retry counts = %d/%d, want 1/1", retried, stillUnmatched)
+	}
+	item, err := h.itemRepo.GetByID(ctx, contentID)
+	if err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if item.Title != "Cloverfield" {
+		t.Fatalf("restored provisional title = %q, want Cloverfield", item.Title)
+	}
+}
+
+func TestWorkerScopedRetryRestoresProvisionalSeriesIdentity(t *testing.T) {
+	h := newTestHarness()
+	ctx := context.Background()
+	const contentID = "local-example-series-scoped-retry"
+	if err := h.itemRepo.Upsert(ctx, &models.MediaItem{
+		ContentID: contentID,
+		Status:    "unmatched",
+		Title:     "Example.Show",
+		Type:      "series",
+		Studios:   []string{},
+		Networks:  []string{},
+		Countries: []string{},
+		Genres:    []string{},
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+	file := &models.MediaFile{
+		ID:            1,
+		MediaFolderID: 10,
+		ContentID:     contentID,
+		FilePath:      "/media/shows/Example Show (2024)/Season 01/Example.Show.S01E01.mkv",
+		BaseTitle:     "Example.Show",
+		BaseYear:      0,
+		BaseType:      "series",
+	}
+	h.fileRepo.setGroupFiles(10, 1, "v1|series|example_show|2024", file)
+	h.fileRepo.contentIDs[file.ID] = contentID
+	h.service.hooks.process = func(_ context.Context, req ProcessRequest) (*ProcessResult, error) {
+		if req.Mode != ModeScheduledRefresh {
+			t.Fatalf("process mode = %v, want scheduled refresh", req.Mode)
+		}
+		item, err := h.itemRepo.GetByID(ctx, contentID)
+		if err != nil {
+			t.Fatalf("load item in process hook: %v", err)
+		}
+		if item.Title != "Example Show" {
+			t.Fatalf("pre-refresh provisional title = %q, want Example Show", item.Title)
+		}
+		item.Title = "Example.Show"
+		if err := h.itemRepo.Upsert(ctx, item); err != nil {
+			t.Fatalf("simulate failed-match persistence: %v", err)
+		}
+		return &ProcessResult{Updated: false}, nil
+	}
+
+	worker := NewMatchWorker(h.service, h.fileRepo, 1, 1, 0)
+	worker.itemLister = &fakeScopedUnmatchedItemLister{contentIDs: []string{contentID}}
+	retried, stillUnmatched, err := worker.RetryUnmatchedItemsByFolderAndPathPrefix(
+		ctx, 10, "/media/shows/Example Show (2024)",
+	)
+	if err != nil {
+		t.Fatalf("scoped retry error = %v", err)
+	}
+	if retried != 1 || stillUnmatched != 1 {
+		t.Fatalf("scoped retry counts = %d/%d, want 1/1", retried, stillUnmatched)
+	}
+	item, err := h.itemRepo.GetByID(ctx, contentID)
+	if err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if item.Title != "Example Show" {
+		t.Fatalf("restored provisional title = %q, want Example Show", item.Title)
+	}
+}
 
 func TestWorkerClaimBackgroundFiles_WithMovieQueueAndTVQueueDisabledUsesGenericClaims(t *testing.T) {
 	h := newTestHarness()
@@ -1684,6 +1888,104 @@ func TestReparseQueuedFileIdentityClearsStaleYearAndUsesQueueType(t *testing.T) 
 	}
 	if file.BaseYear != 1999 || file.BaseType != "series" {
 		t.Fatalf("persisted scan model was mutated: %#v", file)
+	}
+}
+func TestReparseQueuedFileIdentityUsesReleaseFolderIdentity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		filePath  string
+		wantTitle string
+		wantYear  int
+	}{
+		{
+			name:      "cloverfield",
+			filePath:  "/movies/Cloverfield.1080p.Bluray.x264-1920/1920-cloverfield.mkv",
+			wantTitle: "Cloverfield",
+		},
+		{
+			name:      "65",
+			filePath:  "/movies/65.2023.1080p.WEB.H264-NAISU/65.2023.1080p.web.h264-naisu.mkv",
+			wantTitle: "65",
+			wantYear:  2023,
+		},
+		{
+			name:      "about time",
+			filePath:  "/movies/About.Time.2013.1080p.BluRay.x264-SPARKS/About.Time.2013.1080p.BluRay.x264-SPARKS.mkv",
+			wantTitle: "About Time",
+			wantYear:  2013,
+		},
+		{
+			name:      "anna",
+			filePath:  "/movies/Anna.2019.1080p.BluRay.x264-SPARKS/anna.2019.1080p.bluray.x264-sparks.mkv",
+			wantTitle: "Anna",
+			wantYear:  2019,
+		},
+		{
+			name:      "a family affair",
+			filePath:  "/movies/A.Family.Affair.2024.1080p.WEB.h264-ETHEL/A.Family.Affair.2024.1080p.WEB.h264-ETHEL.mkv",
+			wantTitle: "A Family Affair",
+			wantYear:  2024,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			file := &models.MediaFile{
+				FilePath:  test.filePath,
+				BaseTitle: "stale release filename",
+				BaseYear:  1999,
+				BaseType:  "movie",
+			}
+			current := reparseQueuedFileIdentity(file, "movie")
+			if current.BaseTitle != test.wantTitle || current.BaseYear != test.wantYear || current.BaseType != matchContentTypeMovie {
+				t.Fatalf("reparsed identity = %q/%d/%q, want %q/%d/%q", current.BaseTitle, current.BaseYear, current.BaseType, test.wantTitle, test.wantYear, matchContentTypeMovie)
+			}
+		})
+	}
+}
+
+func TestReusableQueuedMovieSkeletonRefreshesProvisionalIdentity(t *testing.T) {
+	t.Parallel()
+	h := newTestHarness()
+	ctx := context.Background()
+	const contentID = "local-release-folder-identity"
+	if err := h.itemRepo.Upsert(ctx, &models.MediaItem{
+		ContentID: contentID,
+		Status:    "unmatched",
+		Title:     "1920-cloverfield",
+		Type:      "movie",
+		Studios:   []string{},
+		Networks:  []string{},
+		Countries: []string{},
+		Genres:    []string{},
+	}); err != nil {
+		t.Fatalf("seed item: %v", err)
+	}
+
+	worker := NewMatchWorker(h.service, h.fileRepo, 1, 1, 0)
+	file := &models.MediaFile{
+		ID:        1,
+		ContentID: contentID,
+		FilePath:  "/movies/Cloverfield.1080p.Bluray.x264-1920/1920-cloverfield.mkv",
+		BaseTitle: "1920-cloverfield",
+		BaseType:  "movie",
+	}
+	skeleton, ok := worker.reusableQueuedMovieSkeleton(ctx, file, false)
+	if !ok || skeleton == nil {
+		t.Fatal("expected reusable skeleton")
+	}
+	if skeleton.Title != "Cloverfield" {
+		t.Fatalf("skeleton title = %q, want Cloverfield", skeleton.Title)
+	}
+	item, err := h.itemRepo.GetByID(ctx, contentID)
+	if err != nil {
+		t.Fatalf("reload item: %v", err)
+	}
+	if item.Title != "Cloverfield" {
+		t.Fatalf("stored provisional title = %q, want Cloverfield", item.Title)
 	}
 }
 

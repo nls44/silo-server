@@ -70,6 +70,8 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-silo}:${POSTGRES_PASSWORD:-silo}@postgres:5432/${POSTGRES_DB:-silo}?sslmode=disable
       REDIS_URL: redis://redis:6379
       SILO_PLUGIN_CACHE_DIR: /var/lib/silo/plugins
+      # Set this in .env to a stable unique value for each container instance.
+      SILO_MACHINE_ID: ${SILO_MACHINE_ID:-}
       POSTGRES_TUNE: ${POSTGRES_TUNE:-auto}
     ports:
       - "${PORT:-8090}:8080"

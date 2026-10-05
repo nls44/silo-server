@@ -89,6 +89,33 @@ func TestInferRootAssignments_DoesNotMarkBracketedYearMovieAmbiguous(t *testing.
 	}
 }
 
+func TestInferRootAssignments_RecognizesSceneReleaseMovieFolder(t *testing.T) {
+	filePath := "/movies/Annabelle.2.Creation.2017.1080p.BluRay.x264-SPARKS/annabelle.2.creation.2017.1080p.bluray.x264-sparks.mkv"
+	roots, assignments := InferRootAssignments([]string{filePath}, "movie", 1, nil)
+	if len(roots) != 1 {
+		t.Fatalf("len(roots) = %d, want 1", len(roots))
+	}
+
+	assignment, ok := assignments[filePath]
+	if !ok {
+		t.Fatal("missing root assignment")
+	}
+	wantRoot := "/movies/Annabelle.2.Creation.2017.1080p.BluRay.x264-SPARKS"
+	if assignment.RootPath != wantRoot {
+		t.Fatalf("RootPath = %q, want %q", assignment.RootPath, wantRoot)
+	}
+	if !assignment.HasMovieEvidence {
+		t.Fatal("HasMovieEvidence = false, want true")
+	}
+	group := InferGroupIdentity(filePath, "movie", assignment)
+	if got, want := group.BaseTitle, "Annabelle 2 Creation"; got != want {
+		t.Fatalf("BaseTitle = %q, want %q", got, want)
+	}
+	if got, want := group.BaseYear, 2017; got != want {
+		t.Fatalf("BaseYear = %d, want %d", got, want)
+	}
+}
+
 func TestInferGroupIdentity_DoesNotMarkAmpersandVariantAmbiguous(t *testing.T) {
 	group := InferGroupIdentity(
 		"/movies/Cowboys and Aliens (2011)/Cowboys & Aliens 2011 Extended Directors Cut BluRay 1080p REMUX AVC DTS-HD MA 5.1-EPSiLON.mkv",
@@ -222,6 +249,27 @@ func TestInferGroupIdentity_PrefersCleanedReleaseFolderOverFilename(t *testing.T
 	}
 	if got, want := group.Confidence, "medium"; got != want {
 		t.Fatalf("Confidence = %q, want %q", got, want)
+	}
+}
+
+func TestInferGroupIdentity_CleansSceneReleaseFolderTitle(t *testing.T) {
+	group := InferGroupIdentity(
+		"/movies/Annabelle.2.Creation.2017.1080p.BluRay.x264-SPARKS/annabelle.2.creation.2017.1080p.bluray.x264-sparks.mkv",
+		"movies",
+		RootAssignment{
+			RootPath:     "/movies/Annabelle.2.Creation.2017.1080p.BluRay.x264-SPARKS",
+			InferredType: "movie",
+		},
+	)
+
+	if got, want := group.BaseTitle, "Annabelle 2 Creation"; got != want {
+		t.Fatalf("BaseTitle = %q, want %q", got, want)
+	}
+	if got, want := group.BaseYear, 2017; got != want {
+		t.Fatalf("BaseYear = %d, want %d", got, want)
+	}
+	if got, want := group.State, "resolved"; got != want {
+		t.Fatalf("State = %q, want %q", got, want)
 	}
 }
 

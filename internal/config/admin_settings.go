@@ -291,6 +291,7 @@ var adminSettingDefaults = map[string]string{
 	"matcher.enable_tv_series_root_queue":  "true",
 	"matcher.enable_tv_series_group_queue": "false",
 	"metadata.cache_images":                "true",
+	"metadata.aggressive_auto_match":       "false",
 	"artwork.storage_backend":              "auto",
 	"artwork.local_path":                   "/var/lib/silo/artwork",
 	"markers.mode":                         "both",
@@ -567,7 +568,7 @@ func NormalizeAdminSetting(key, raw string) (string, error) {
 	value := strings.TrimSpace(raw)
 
 	switch key {
-	case "metadata.cache_images", "playback.transcode_enabled", PlaybackAllowHEVCEncodingSettingKey,
+	case "metadata.cache_images", "metadata.aggressive_auto_match", "playback.transcode_enabled", PlaybackAllowHEVCEncodingSettingKey,
 		ChapterThumbnailSoftwareToneMapSettingKey, PlaybackTranscodeHardwareToneMapSettingKey,
 		PlaybackTranscodeSoftwareToneMapSettingKey, CatalogScopeVersionsToLibrarySettingKey,
 		Allow4KTranscodeSettingKey, playback.TranscodeThrottleEnabledSettingKey, "audiobookshelf_compat.enabled",

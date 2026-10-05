@@ -492,6 +492,30 @@ func TestSelectInitialMatchCandidate_AggressiveAcceptsExactTitleNoYear(t *testin
 	}
 }
 
+func TestSelectInitialMatchCandidate_AggressiveAcceptsFirstSameTitleCandidate(t *testing.T) {
+	hints := &MatchHints{Title: "3:10 to Yuma", Type: "movie", AggressiveAutoMatch: true}
+	cands := []MatchCandidate{
+		{
+			Title:       "3:10 to Yuma",
+			Year:        2007,
+			ContentType: "movie",
+			Sources:     []string{"tmdb"},
+			ProviderIDs: map[string]string{"tmdb": "1"},
+		},
+		{
+			Title:       "3:10 to Yuma",
+			Year:        1957,
+			ContentType: "movie",
+			Sources:     []string{"tmdb"},
+			ProviderIDs: map[string]string{"tmdb": "2"},
+		},
+	}
+	got, ok := selectInitialMatchCandidate(hints, cands, nil)
+	if !ok || got == nil || got.ProviderIDs["tmdb"] != "1" {
+		t.Fatalf("expected first same-title candidate accepted, got ok=%v cand=%+v", ok, got)
+	}
+}
+
 func TestSelectInitialMatchCandidate_AggressiveAcceptsDifferentTitle(t *testing.T) {
 	// Aggressive mode trusts the provider's top result even when the title
 	// differs (e.g. "12 Monkeys" vs TMDB's "Twelve Monkeys").

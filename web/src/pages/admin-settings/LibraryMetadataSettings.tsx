@@ -51,6 +51,7 @@ const SCANNER_KEYS = [
   "matcher.workers",
   "matcher.batch_size",
   "metadata.image_workers",
+  "metadata.aggressive_auto_match",
 ];
 
 const SCANNING_GROUP_KEYS = [REALTIME_MONITORING_KEY, ...SCANNER_KEYS];
@@ -350,6 +351,13 @@ export default function LibraryMetadataSettings() {
               value={form.getValue("matcher.batch_size")}
               onChange={(value) => form.setValue("matcher.batch_size", value)}
               restartRequired={restartKeys.has("matcher.batch_size")}
+            />
+            <SettingField
+              label="Prefer the top metadata match"
+              type="toggle"
+              description="When on, Silo accepts the provider's top result when multiple candidates compete. This is usually right, but can select the wrong remake."
+              value={form.getValue("metadata.aggressive_auto_match")}
+              onChange={(value) => form.setValue("metadata.aggressive_auto_match", value)}
             />
           </AdvancedSection>
         </FieldGroup>

@@ -256,6 +256,7 @@ func TestNormalizeAdminSettingRejectsInvalidValues(t *testing.T) {
 	}{
 		{key: "database.max_connections", value: "0"},
 		{key: "metadata.cache_images", value: "maybe"},
+		{key: "metadata.aggressive_auto_match", value: "maybe"},
 		{key: ChapterThumbnailSoftwareToneMapSettingKey, value: "maybe"},
 		{key: PlaybackTranscodeHardwareToneMapSettingKey, value: "maybe"},
 		{key: PlaybackTranscodeSoftwareToneMapSettingKey, value: "maybe"},
