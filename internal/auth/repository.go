@@ -53,7 +53,7 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 const allColumns = `id, email, username, password_hash, local_password_login_enabled, password_change_required, role, permissions, enabled,
 	library_ids, max_playback_quality, access_policy_revision,
 	max_streams, max_transcodes, max_remote_stream_bitrate_kbps, max_local_stream_bitrate_kbps, transcode_allowed, audio_transcode_allowed, max_profiles, download_allowed,
-	download_transcode_allowed, requests_allowed, access_group_id, is_owner, created_at, updated_at`
+	download_transcode_allowed, requests_allowed, access_group_id, is_owner, break_glass, created_at, updated_at`
 
 // scanUser scans a single row into a *models.User.
 func scanUser(row pgx.Row) (*models.User, error) {
@@ -83,6 +83,7 @@ func scanUser(row pgx.Row) (*models.User, error) {
 		&u.RequestsAllowed,
 		&u.AccessGroupID,
 		&u.IsOwner,
+		&u.BreakGlass,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	)
@@ -125,6 +126,7 @@ func scanUsers(rows pgx.Rows) ([]*models.User, error) {
 			&u.RequestsAllowed,
 			&u.AccessGroupID,
 			&u.IsOwner,
+			&u.BreakGlass,
 			&u.CreatedAt,
 			&u.UpdatedAt,
 		)
@@ -339,14 +341,30 @@ func accessGroupSetClause(input models.UpdateUserInput, argIndex int) (setClause
 
 // Update modifies a user's fields. Only non-nil fields in the input are updated.
 // If the input contains a Password, it is bcrypt-hashed before storage.
+// It runs in its own transaction, so a promotion and the credential cleanup
+// it implies commit together.
 func (r *UserRepository) Update(ctx context.Context, id int, input models.UpdateUserInput) error {
-	return updateUser(ctx, r.pool, id, input)
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := updateUser(ctx, tx, id, input); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func updateUser(ctx context.Context, db interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, id int, input models.UpdateUserInput) error {
+	currentRole, err := updateCurrentRole(ctx, db, id, input)
+	if err != nil {
+		return err
+	}
+	roleChanging := input.Role != nil && *input.Role != currentRole
+	promoting := roleChanging && *input.Role == models.RoleAdmin
 	var email *string
 	if input.Email != nil {
 		normalized := NormalizeEmail(*input.Email)
@@ -404,6 +422,7 @@ func updateUser(ctx context.Context, db interface {
 		{column: "download_allowed", set: input.DownloadAllowed.Set, value: input.DownloadAllowed.Value},
 		{column: "download_transcode_allowed", set: input.DownloadTranscodeAllowed.Set, value: input.DownloadTranscodeAllowed.Value},
 		{column: "requests_allowed", set: input.RequestsAllowed.Set, value: input.RequestsAllowed.Value},
+		breakGlassUpdateColumn(input),
 	}
 
 	setClauses := []string{}
@@ -475,7 +494,80 @@ func updateUser(ctx context.Context, db interface {
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
+	if roleChanging {
+		if err := endImpersonationsInvolving(ctx, db, id); err != nil {
+			return err
+		}
+	}
+	if promoting {
+		return revokeCredentialsIssuedToNonAdmin(ctx, db, id)
+	}
+	return nil
+}
 
+// breakGlassUpdateColumn writes the break-glass flag when the update names
+// it, and clears it when the update moves the account off the admin role,
+// which users_break_glass_admin would otherwise refuse.
+func breakGlassUpdateColumn(input models.UpdateUserInput) userUpdateColumn {
+	demoting := input.Role != nil && *input.Role != models.RoleAdmin
+	switch {
+	case demoting:
+		return userUpdateColumn{column: columnBreakGlass, set: true, value: false}
+	case input.BreakGlass != nil:
+		return userUpdateColumn{column: columnBreakGlass, set: true, value: *input.BreakGlass}
+	}
+	return userUpdateColumn{column: columnBreakGlass}
+}
+
+const columnBreakGlass = "break_glass"
+
+// updateCurrentRole returns account id's role before an update that sets
+// one, and "" for an update that leaves the role alone.
+func updateCurrentRole(ctx context.Context, db interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, id int, input models.UpdateUserInput) (string, error) {
+	if input.Role == nil {
+		return "", nil
+	}
+	var role string
+	err := db.QueryRow(ctx, `SELECT role FROM users WHERE id=$1`, id).Scan(&role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return role, err
+}
+
+// endImpersonationsInvolving ends the impersonation sessions account id
+// started and those viewing the server as it. A role change keeps the
+// account's own sessions (their access tokens must be refreshed to carry the
+// new role), but a demoted admin may no longer view as anyone, and a promoted
+// account may only be viewed as by the Owner. Refreshing an impersonation
+// session would otherwise carry it across the change.
+func endImpersonationsInvolving(ctx context.Context, db interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, id int) error {
+	if _, err := db.Exec(ctx, `
+		UPDATE auth_sessions SET revoked_at = NOW()
+		WHERE (impersonator_user_id = $1 OR (user_id = $1 AND impersonator_user_id IS NOT NULL))
+		  AND revoked_at IS NULL`, id); err != nil {
+		return fmt.Errorf("ending impersonation sessions after a role change: %w", err)
+	}
+	return nil
+}
+
+// revokeCredentialsIssuedToNonAdmin deletes the API keys and reset links of
+// an account being made an admin or the Owner. Other admins may have minted
+// them and kept them; afterwards they would carry authority that only the
+// Owner grants.
+func revokeCredentialsIssuedToNonAdmin(ctx context.Context, db interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, id int) error {
+	if _, err := db.Exec(ctx, `DELETE FROM api_keys WHERE user_id = $1`, id); err != nil {
+		return fmt.Errorf("revoking the promoted account's API keys: %w", err)
+	}
+	if _, err := db.Exec(ctx, `DELETE FROM password_reset_tokens WHERE user_id = $1`, id); err != nil {
+		return fmt.Errorf("deleting the promoted account's reset links: %w", err)
+	}
 	return nil
 }
 
@@ -673,6 +765,9 @@ func (r *UserRepository) CreateInvited(ctx context.Context, input models.CreateU
 		return nil, fmt.Errorf("beginning invited account: %w", err)
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx)) //nolint:errcheck
+	if err := EnsureLocalPasswordLoginAllowedInTransaction(ctx, tx); err != nil {
+		return nil, err
+	}
 	if err := redeemCode(ctx, tx, code); err != nil {
 		return nil, err
 	}

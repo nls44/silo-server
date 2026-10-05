@@ -7,9 +7,15 @@ import {
   useCreateUser,
   useUpdateUser,
   useAdminUserCapabilities,
+  useAdminPolicyDefaults,
   useViewerIsOwner,
 } from "@/hooks/queries/admin/users";
-import { canManageAccount, canViewAsAccount } from "@/lib/accountOwner";
+import {
+  accountRoleLabel,
+  canChangeAccessPolicy,
+  canManageAccount,
+  canViewAsAccount,
+} from "@/lib/accountOwner";
 import { useAdminServerSettings } from "@/hooks/queries/admin/settings";
 import { useAdminLibraries } from "@/hooks/queries/admin/libraries";
 import { useAccessGroups } from "@/hooks/queries/admin/accessGroups";
@@ -20,6 +26,7 @@ import {
   policyCreateFields,
   policyDefaultSource,
   policyInheritHints,
+  savedUserPolicyInheritHints,
   policyStateFromUser,
   policyUpdateFields,
 } from "@/components/UserPolicyFields";
@@ -87,6 +94,7 @@ import {
 import { formatDateTime as formatDateTimePreferred } from "@/lib/datetime";
 import { INVALID_EMAIL_MESSAGE, isValidEmail } from "@/lib/email";
 
+const POLICY_LOCKED = "Only the server owner can change an admin's access and limits.";
 const PAGE_SIZE_OPTIONS = ["25", "50", "100"] as const;
 type UserSortField = "username" | "email" | "role" | "enabled" | "created_at" | "last_active_at";
 type SortDirection = "asc" | "desc";
@@ -430,12 +438,9 @@ function AdminUsersPage() {
                     </TableCell>
                     <TableCell>{u.email}</TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap gap-1">
-                        <Badge variant={u.role === "admin" ? "default" : "secondary"}>
-                          {u.role}
-                        </Badge>
-                        {u.is_owner && <Badge variant="outline">Owner</Badge>}
-                      </div>
+                      <Badge variant={u.role === "admin" ? "default" : "secondary"}>
+                        {accountRoleLabel(u)}
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       {u.role === "admin" ? (
@@ -494,7 +499,7 @@ function AdminUsersPage() {
                               <TooltipContent>View as user</TooltipContent>
                             </Tooltip>
                           )}
-                          {canManageAccount(u, viewerId) && (
+                          {canManageAccount(u, viewerId, viewerIsOwner) && (
                             <Tooltip>
                               <TooltipTrigger asChild>
                                 <Button
@@ -512,22 +517,24 @@ function AdminUsersPage() {
                               <TooltipContent>Edit user</TooltipContent>
                             </Tooltip>
                           )}
-                          {!u.is_owner && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-7 w-7"
-                                  aria-label={`Delete ${u.username}`}
-                                  onClick={() => handleDelete(u)}
-                                >
-                                  <Trash2 className="h-3 w-3" aria-hidden="true" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Delete user</TooltipContent>
-                            </Tooltip>
-                          )}
+                          {!u.is_owner &&
+                            u.id !== viewerId &&
+                            canManageAccount(u, viewerId, viewerIsOwner) && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    aria-label={`Delete ${u.username}`}
+                                    onClick={() => handleDelete(u)}
+                                  >
+                                    <Trash2 className="h-3 w-3" aria-hidden="true" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Delete user</TooltipContent>
+                              </Tooltip>
+                            )}
                         </div>
                       </TooltipProvider>
                     </TableCell>
@@ -644,7 +651,7 @@ function sortAdminUsers(users: AdminUser[], field: UserSortField, dir: SortDirec
         result = compareText(a.email, b.email);
         break;
       case "role":
-        result = compareText(a.role, b.role);
+        result = compareText(accountRoleLabel(a), accountRoleLabel(b));
         break;
       case "enabled":
         result = compareText(a.enabled ? "active" : "disabled", b.enabled ? "active" : "disabled");
@@ -738,6 +745,16 @@ function UserForm({
   const [reloading, setReloading] = useState(false);
   const [saved, setSaved] = useState(false);
   const capabilities = useAdminUserCapabilities();
+  // Only the server Owner may grant the admin role; the server refuses anyone else.
+  const viewerId = useAuth().user?.id;
+  const viewerIsOwner = useViewerIsOwner(viewerId);
+  const adminRoleLocked = !viewerIsOwner && user?.role !== "admin";
+  // No account changes its own role or disables itself; the server refuses
+  // both. The Owner's standing fixes the same fields.
+  const ownAccount = user?.id !== undefined && user?.id === viewerId;
+  // Only the Owner changes an admin's access policy, its own included; the
+  // server refuses anyone else.
+  const policyLocked = user !== undefined && !canChangeAccessPolicy(user, viewerId, viewerIsOwner);
   const [createDefaultProfile, setCreateDefaultProfile] = useState(true);
   async function reload() {
     if (!editor || busy.current) return;
@@ -760,6 +777,7 @@ function UserForm({
 
   const { data: libraries = [] } = useAdminLibraries();
   const { data: accessGroups = [], isSuccess: accessGroupsLoaded } = useAccessGroups();
+  const { data: policyDefaults } = useAdminPolicyDefaults();
   const [username, setUsername] = useState(user?.username ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
   const [password, setPassword] = useState("");
@@ -802,9 +820,12 @@ function UserForm({
   const hintSource = awaitingDefaultGroup ? "group" : policyDefaultSource(role, inheritGroupID);
   const inheritHints = awaitingDefaultGroup
     ? undefined
-    : (policyInheritHints(inheritGroupID, accessGroups) ??
+    : (policyInheritHints(role, inheritGroupID, accessGroups, policyDefaults) ??
+      // Until the group or the server defaults load, the saved account's
+      // resolved values stand in, but only for fields it does not override:
+      // an override is not what the field falls back to.
       (role !== "admin" && user && selectedGroupID === user.access_group_id
-        ? user.effective_policy
+        ? savedUserPolicyInheritHints(user, undefined)
         : undefined));
   // The group to send: none while the default group is still unknown, so the
   // server applies its own default instead of an accidental "no group".
@@ -850,7 +871,7 @@ function UserForm({
           permissions,
           enabled,
           max_profiles: maxProfiles,
-          ...policyUpdateFields(policy),
+          ...(policyLocked ? {} : policyUpdateFields(policy)),
         };
         if (groupToSend !== undefined) {
           body.access_group_id = groupToSend;
@@ -985,15 +1006,31 @@ function UserForm({
               )}
               <div className="space-y-2">
                 <Label htmlFor={roleId}>Role</Label>
-                <Select value={role} onValueChange={setRole} disabled={user?.is_owner}>
+                <Select
+                  value={user?.is_owner ? "owner" : role}
+                  onValueChange={setRole}
+                  disabled={user?.is_owner || ownAccount}
+                >
                   <SelectTrigger id={roleId}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    {user?.is_owner && <SelectItem value="owner">Owner</SelectItem>}
                     <SelectItem value="user">User</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
+                    <SelectItem value="admin" disabled={adminRoleLocked}>
+                      Admin
+                    </SelectItem>
                   </SelectContent>
                 </Select>
+                {ownAccount ? (
+                  <p className="text-muted-foreground text-xs">You can't change your own role.</p>
+                ) : (
+                  adminRoleLocked && (
+                    <p className="text-muted-foreground text-xs">
+                      Only the server owner can grant the admin role.
+                    </p>
+                  )
+                )}
               </div>
             </div>
             {user && (
@@ -1003,7 +1040,9 @@ function UserForm({
                   <div className="text-muted-foreground text-xs">
                     {user.is_owner
                       ? "The server owner stays an enabled admin."
-                      : "Disable access without deleting the user."}
+                      : ownAccount
+                        ? "You can't disable your own account."
+                        : "Disable access without deleting the user."}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1014,7 +1053,7 @@ function UserForm({
                     id={enabledId}
                     checked={enabled}
                     onCheckedChange={setEnabled}
-                    disabled={user.is_owner}
+                    disabled={user.is_owner || ownAccount}
                   />
                 </div>
               </div>
@@ -1090,22 +1129,30 @@ function UserForm({
                 }
               />
             </div>
-            <PolicyAccessFields
-              state={policy}
-              onChange={setPolicy}
-              source={hintSource}
-              effective={inheritHints}
-              libraries={libraries}
-            />
+            <fieldset disabled={policyLocked} className="m-0 min-w-0 space-y-4 border-0 p-0">
+              {policyLocked && <p className="text-muted-foreground text-xs">{POLICY_LOCKED}</p>}
+              <PolicyAccessFields
+                disabled={policyLocked}
+                state={policy}
+                onChange={setPolicy}
+                source={hintSource}
+                effective={inheritHints}
+                libraries={libraries}
+              />
+            </fieldset>
           </TabsContent>
 
           <TabsContent value="limits" className="mt-0 space-y-4">
-            <PolicyLimitFields
-              state={policy}
-              onChange={setPolicy}
-              source={hintSource}
-              effective={inheritHints}
-            />
+            <fieldset disabled={policyLocked} className="m-0 min-w-0 space-y-4 border-0 p-0">
+              {policyLocked && <p className="text-muted-foreground text-xs">{POLICY_LOCKED}</p>}
+              <PolicyLimitFields
+                disabled={policyLocked}
+                state={policy}
+                onChange={setPolicy}
+                source={hintSource}
+                effective={inheritHints}
+              />
+            </fieldset>
             <div className="space-y-1">
               <Label htmlFor={maxProfilesId}>Max Profiles</Label>
               <Input

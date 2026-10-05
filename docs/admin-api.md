@@ -60,8 +60,8 @@ task's triggers with its configured poll interval.
 ## Branding assets
 
 Uploadable images white-label the server: the sidebar wordmark, the square
-mark (collapsed sidebar and installed PWA), optional light-theme variants of
-both, the browser favicon, and the login background. Each is stored in the public S3 bucket and referenced from a
+mark (collapsed sidebar and installed PWA), the browser favicon, and the login
+background. Each is stored in the public S3 bucket and referenced from a
 `server_settings` row, so uploads return `503 unavailable` until
 `s3.public_bucket` is configured.
 
@@ -75,7 +75,10 @@ both, the browser favicon, and the login background. Each is stored in the publi
 Public reads are deliberately unauthenticated: branding has to apply on the
 login page, before anyone has a session.
 
-`{kind}` is one of `wordmark`, `wordmark_light`, `mark`, `mark_light`, `favicon`, `login_bg` — the light variants follow their base kind's processing. Uploads are
+`{kind}` is one of `wordmark`, `mark`, `favicon`, `login_bg`. The web client has a
+single dark theme, so the former light-theme variants are gone from v2; the frozen
+v1 upload route still accepts `wordmark_light` and `mark_light` until v1 retires,
+and the public asset route still serves them. Uploads are
 processed per kind — the numbers below are the contract the admin UI quotes back
 to the operator, and they live in `internal/branding/assets.go`:
 
@@ -385,8 +388,8 @@ Cgroup correction alone is not always enough: a Docker container nested inside
 an LXC container sees no limit on its own cgroup (the LXC's cap lives on an
 ancestor cgroup outside its namespace), so `cpu_pct`, `cores`, `load1`, and the
 memory fields below read as the bare-metal host's totals unless the deployment
-bind-mounts lxcfs's virtualized `/proc` files in — see the LXC section of
-[docs/wiki/deployment/docker.md](wiki/deployment/docker.md#node-metrics).
+bind-mounts lxcfs's virtualized `/proc` files in — see
+[Node resource sampling](architecture/observability.md#node-resource-sampling).
 
 `last_stats.system`:
 
@@ -1035,8 +1038,8 @@ provider. Cached in-process for 15s and bypassed with `?refresh=1`.
 | `watch_providers` | object[] | One entry per watch provider, ordered by `provider`. Always an array, never null. |
 
 `watch_providers` covers the union of the providers registered in the watchsync
-registry — built-in and plugin-contributed alike, so a provider installed by a
-plugin appears as soon as it registers, with zeros — and any provider that has
+registry — every provider is a plugin, so one appears as soon as its plugin
+registers, with zeros — and any provider that has
 rows in the watch-provider tables. The second half of that union keeps history
 visible after a provider's plugin is uninstalled; such an entry carries
 `"registered": false` and falls back to its key as the display name.
@@ -1045,7 +1048,7 @@ Each entry:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `provider` | string | Provider key (`trakt`, `simkl`, `mdblist`, a plugin's key). |
+| `provider` | string | Provider key: `trakt`, `simkl`, or `mdblist` for the first-party plugins, otherwise `plugin:<installation id>:<capability id>`. |
 | `display_name` | string | Human name from the registry, or the key when the provider is not registered. |
 | `registered` | bool | False when the provider only exists in stored rows. |
 | `scrobbling` | bool | The provider declares the scrobble-playback capability. |
@@ -1448,6 +1451,13 @@ lists with an empty `username`; an item no longer in the catalog lists with an e
 `media_title` and `media_type`. The stored client address is not part of this projection,
 matching v1. A missing database returns 503; storage errors are masked as 500.
 
+Two v2-only additions have no v1 counterpart. `ended_after` (an RFC 3339 instant) keeps
+attempts that ended at or after it; an unparsable value is 422, and the cursor binds it
+like the other filters, so a cursor from one window is refused under another. Each entry
+also carries `series_title`, `season_number` and `episode_number`: for an episode attempt
+they come from the catalog episode and its series (`series_title` is empty when the series
+left the catalog); for anything else they are empty and null.
+
 The administrator history page and the user detail watch-history tab read this route
 under the authority captured when the query was created, keyed by an opaque authority
 generation, and refuse a page whose account, server, profile or PIN authority changed while
@@ -1507,6 +1517,22 @@ issued token so the administrator can assign it to a source.
 
 ### Personal history import acceptance and monitoring
 
+Personal history imports on both `/api/v1` and `/api/v2` use the acting
+`X-Profile-Id`. A non-primary profile can import only into itself and see only runs
+targeting itself. The primary profile (with its PIN verified when it has one) and
+server admins can act for any profile on their own account. An API key's exemption
+from PIN entry does not grant household authority to a locked primary profile.
+Creating a run for another profile without this authority returns 403; reading its
+run returns 404. A non-admin request without an acting profile cannot create a run
+and sees no runs. Lists apply the profile filter before their limit, and v2 cursors
+are bound to the account and acting profile.
+
+This deliberately tightens the frozen v1 bridge as a security fix: otherwise its
+run routes would bypass the v2 profile restriction. V1 keeps its existing response
+envelopes, 201 create response, and maximum list size of 50. Web uses v2;
+Apple and Android have no personal history-import consumer, and jellycompat has
+no corresponding import operation.
+
 `POST /api/v2/history-imports/runs` accepts an account-owned import for the supplied
 profile. It returns 202 with the persisted queued run, canonical `Location`, and
 `Retry-After: 2` only after both execution intent and encrypted run credentials commit.
@@ -1516,8 +1542,9 @@ automatically resubmitted; check the account's import list before starting anoth
 
 Poll `GET /api/v2/history-imports/runs/{id}` at its `Location`. The response has a strong
 `ETag`, supports `If-Match` and `If-None-Match`, and returns a bodyless 304 when unchanged.
-The account ownership check runs before evaluating either precondition; another
-account's run returns 404. Nonterminal responses, including 304, carry `Retry-After`.
+The account and profile checks run before evaluating either precondition; a run
+outside the caller's authority returns 404. Nonterminal responses, including 304,
+carry `Retry-After`.
 When `terminal` is true, stop polling; terminal responses omit the polling hint.
 
 The personal projection always reports `cancelable: false`: this surface has no cancel
@@ -1851,6 +1878,48 @@ canonical flag and its ETag. The profile-facing flag reader keeps its existing
 disabled default on read failure; the write fails closed without an atomic store.
 No first-party or internal writer is recorded, so no new UI or native flow is added.
 The bridge writer and profile section enforcement remain unchanged.
+
+### Offline-download preparation
+
+`GET /api/v2/admin/downloads/preparations` lists the server-side remux and
+transcode jobs that turn library files into offline downloads. Items come in
+this order: running jobs, jobs waiting to retry, the queue in claim order (with
+a 1-based `queue_position`), paused jobs in claim order (with `paused_at`), and
+jobs that failed in the last 24 hours, newest first. `limit` (1–500, default
+200) caps the items; `counts` (`running`, `queued`, `retrying`, `paused`,
+`failed_recent`) always covers every listed job, so a client can tell when items
+were cut. Each item carries its source and output
+recipe, the worker of the current or last attempt (`server` with the API node
+id, or `node` with the transcode node id and name), attempt counts, the last
+error, the latest `progress` reading (`encoded_seconds`, `duration_seconds`,
+`speed`, `updated_at`) of a running job, `progress_unavailable` when the worker
+cannot report progress, the `log_session_id` its FFmpeg output is logged under,
+and the download rows waiting on it with their account, profile, and device.
+
+`POST /api/v2/admin/downloads/preparations/pause`, `/resume`, and `/cancel`
+take `{"ids": [...]}` (1–500 job ids) and return one `{id, outcome}` per
+distinct id in request order. `outcome` is `applied`, `unchanged` (already in
+the requested state), `not_found` (no such job is being prepared: it finished,
+was canceled, or never existed), or `not_applicable` (pausing or resuming a
+failed job). Pause keeps a job's queue position but no worker claims it until
+it is resumed; a running encode stops and restarts from the beginning on resume,
+and the stopped attempt does not count against the job. Its waiting downloads
+stay `preparing`. Resume returns the job to the queue, or to a retry backoff
+that has not elapsed. Cancel removes running, queued, retrying, paused, and
+failed jobs; every download still waiting on a canceled job becomes `failed`
+with `error_message` `Canceled by an administrator`. A job that finished
+preparing is never touched. The three operations are idempotent.
+
+`GET /api/v2/admin/downloads/preparations/capabilities` reports availability,
+the realtime channel (`download_preparations`), the failure window in seconds,
+and `controls` when pause, resume, and cancel are available. The admin-only channel publishes `download_preparation.changed`
+(`{id}`) when a job is queued, claimed, assigned a worker, finishes, fails, is
+requeued, paused, resumed, or canceled, and when a user adds or removes a
+download waiting on it, and `download_preparation.progress` (`{id, progress}`) at most every
+five seconds per running job. The subscription snapshot is `null`; re-read the
+list after subscribing. See
+[preparation progress](downloads-api.md#preparation-progress-admin) for how the
+server records it.
 
 ### Sequenced administrator playback commands (v2)
 
@@ -2750,14 +2819,20 @@ operations, halving the chunk size after a 413 and cancelling the abandoned sess
 ### Plugin installation configuration and bindings in v2
 
 `PUT /api/v2/admin/plugins/installations/{id}/config` replaces one global configuration
-entry. The body names the manifest `global_config_schema` key and the entry's fields;
-manifest-declared secret fields left blank keep their stored value, and a secret is removed
-only when named in `clear_secrets`. The server validates the merged entry against the
+entry. The body names the manifest `global_config_schema` key and the entry's fields, which
+are merged over the stored entry: an omitted field keeps its stored value. A declared
+non-secret top-level field sent as `null` or a blank string is removed from the stored entry,
+so the plugin's default applies; fields the manifest does not declare (plugin-owned state)
+are kept. Manifest-declared secret fields left blank keep their stored value, and a secret is
+removed only when named in `clear_secrets`. The frozen v1 `PUT .../config` shares the
+clearing rule as a bridge bug fix: before it, an emptied field kept its stored value. The
+connection test (`.../config/test` and the auth connection test) merges a staged entry the
+same way without storing it. The server validates the merged entry against the
 plugin's schema and returns 422 with the plugin's own message on failure, then persists
 under a compare-and-swap on the stored revision and stops the running plugin so it rebinds.
 Success is 204. Repeating the same request converges on one stored entry, so the row is
-classified naturally idempotent. The merge preserves stored secrets only; it does not
-protect concurrent edits to public fields by two administrators, and the last write wins.
+classified naturally idempotent. The merge keeps stored secrets and omitted fields; it does
+not protect concurrent edits to public fields by two administrators, and the last write wins.
 The entry is administrator-only and the web client never replays a submission
 automatically. A revision precondition (`If-Match`) is a follow-up, not part of this port.
 
@@ -2772,10 +2847,13 @@ result to the operator instead of resubmitting.
 
 `PUT /api/v2/admin/plugins/installations/{id}/auth-binding` and
 `PUT /api/v2/admin/plugins/installations/{id}/task-bindings/{capability_id}` assign one
-whole binding row keyed by installation and capability and mark a server restart required.
-The auth binding answers 204 with `X-Silo-Restart-Required: true`; the task binding answers
-200 with `restart_required` true, matching the legacy shapes. An omitted task trigger
-stores an empty object. Both are naturally idempotent upserts.
+whole binding row keyed by installation and capability. The auth binding answers 204 with
+`X-Silo-Restart-Required: false`: sign-in providers rebuild on every node without a
+restart. An omitted `auto_provision` is true, and enabling an auth binding while another
+is enabled is 409 `provider_already_enabled`
+([external-sign-in.md](architecture/external-sign-in.md)). The task binding marks a server
+restart required and answers 200 with `restart_required` true, matching the legacy shape.
+An omitted task trigger stores an empty object. Both are naturally idempotent upserts.
 
 All four require an acting administrator, restrict demo access, answer 404 for an unknown
 installation, 409 for the reserved built-in host row, 422 for a blank key or capability, and
