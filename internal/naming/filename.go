@@ -180,6 +180,13 @@ func applyFilenameSeriesIdentity(filePath, filenameTitle, libraryRoot string, ct
 	title, year := parseTitleYearCandidate(filenameTitle)
 	atLibraryRoot := libraryRoot != "" && filepath.Clean(ctx.RootPath) == libraryRoot
 	filenameOnly := path.Dir(filePath) == "." || path.Dir(filePath) == "/"
+	// A configured library root is organization, not a show. Clear the folder
+	// name-derived identity before allowing a named flat-library filename to
+	// supply its own title. Otherwise an anonymous file such as E02.mkv can
+	// turn "My Library (2024)" into a false series identity.
+	if atLibraryRoot {
+		ctx.Title, ctx.Year = "", 0
+	}
 	// A release filename can add a bare year to an otherwise matching folder
 	// title. Require that corroboration before treating a title's number as a year.
 	if stem := parseInferMovieStem(filenameTitle, ctx.Title, ctx.Year); !atLibraryRoot && stem.Year != 0 && inferTitlesCoherent(stem.Title, ctx.Title) {

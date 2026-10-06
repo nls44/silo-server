@@ -225,8 +225,10 @@ func populateSeriesGroupIdentity(filePath string, libraryType string, assignment
 	year := assignment.Year
 	state := "resolved"
 	reasons := []string{}
+	syntheticRoot := filepath.Clean(group.ObservedRootPath) == filepath.Clean(filePath) ||
+		filepath.Clean(group.ObservedRootPath) == filepath.Clean(assignment.LibraryRootPath)
 	if ctx != nil {
-		if cleanedFolderOk && cleanedFolderTitle != "" {
+		if cleanedFolderOk && cleanedFolderTitle != "" && !syntheticRoot {
 			title = cleanedFolderTitle
 			reasons = append(reasons, "cleaned_release_folder")
 			if cleanedFolderYear != 0 && year == 0 {
@@ -244,8 +246,9 @@ func populateSeriesGroupIdentity(filePath string, libraryType string, assignment
 		title = folderTitle
 		year = folderYear
 	}
-	if filepath.Clean(group.ObservedRootPath) == filepath.Clean(filePath) || group.ObservedRootPath == assignment.LibraryRootPath {
+	if syntheticRoot {
 		observedTitle, observedYear, observedTrusted = "", 0, false
+		cleanedFolderTitle, cleanedFolderYear, cleanedFolderOk = "", 0, false
 	}
 	if title == "" {
 		title = observedTitle
