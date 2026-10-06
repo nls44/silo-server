@@ -117,6 +117,24 @@ and a short commit SHA alongside `latest`. Build numbers order published images;
 they are not release versions. [Release versioning](docs/release-versioning.md)
 defines each tag and the SemVer contract.
 
+## Changes in this fork
+
+Compared with upstream `Silo-Server/silo-server`, this fork adds:
+
+- Folder-aware movie and series matching for release-style names, season folders,
+  and flat libraries. Library roots are kept separate from media identities, so
+  anonymous episode files do not inherit a library's name or provider IDs.
+- An optional **Prefer the top metadata match** setting for more aggressive
+  automatic matching, with background movie and series match queues and scoped
+  retries for previously unmatched items.
+- Better autoscan diagnostics. Activity entries retain bounded samples of both
+  the source path and the rewritten path when an incoming path does not resolve
+  to a Silo library folder.
+- Realtime detection of external subtitle changes. When a matching `.srt`,
+  `.vtt`, `.ass`, `.ssa`, or `.sub` file is added, replaced, or deleted, Silo
+  queues a narrow scan of the containing media directory, including on
+  symlinked and FUSE-backed library paths.
+
 ## Documentation
 
 - [User manual](https://siloserver.org/docs) — installing, configuring, and running Silo
