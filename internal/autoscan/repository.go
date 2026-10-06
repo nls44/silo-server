@@ -270,6 +270,31 @@ func unmarshalPathRewrites(raw []byte) ([]PathRewrite, error) {
 	return out, nil
 }
 
+func unmarshalUnmatchedPaths(raw []byte) ([]UnmatchedPath, error) {
+	if len(raw) == 0 {
+		return []UnmatchedPath{}, nil
+	}
+	var out []UnmatchedPath
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode autoscan unmatched paths: %w", err)
+	}
+	if out == nil {
+		out = []UnmatchedPath{}
+	}
+	return out, nil
+}
+
+func marshalUnmatchedPaths(paths []UnmatchedPath) ([]byte, error) {
+	if paths == nil {
+		paths = []UnmatchedPath{}
+	}
+	b, err := json.Marshal(paths)
+	if err != nil {
+		return nil, fmt.Errorf("encode autoscan unmatched paths: %w", err)
+	}
+	return b, nil
+}
+
 // marshalPathRewrites encodes path rewrites for the jsonb column. A nil slice is
 // stored as an empty JSON array (matching the column default '[]').
 func marshalPathRewrites(rewrites []PathRewrite) ([]byte, error) {
@@ -546,11 +571,12 @@ func (r *Repository) RecordError(ctx context.Context, sourceID, msg string) erro
 
 const eventColumns = `id, source_id, plugin_id, capability_id, started_at, completed_at,
 	duration_ms, status, delivery_mode, provider_event_type, changes_returned, changes_resolved,
-	targets_claimed, scans_created, scans_reused, scans_suppressed, error_message, marker_before, marker_after`
+	targets_claimed, scans_created, scans_reused, scans_suppressed, error_message, unmatched_paths, marker_before, marker_after`
 
 func scanEvent(row interface{ Scan(...any) error }) (Event, error) {
 	var e Event
 	var status string
+	var unmatchedPaths []byte
 	if err := row.Scan(
 		&e.ID,
 		&e.SourceID,
@@ -569,12 +595,18 @@ func scanEvent(row interface{ Scan(...any) error }) (Event, error) {
 		&e.ScansReused,
 		&e.ScansSuppressed,
 		&e.ErrorMessage,
+		&unmatchedPaths,
 		&e.MarkerBefore,
 		&e.MarkerAfter,
 	); err != nil {
 		return Event{}, err
 	}
 	e.Status = EventStatus(status)
+	var err error
+	e.UnmatchedPaths, err = unmarshalUnmatchedPaths(unmatchedPaths)
+	if err != nil {
+		return Event{}, err
+	}
 	return e, nil
 }
 
@@ -670,6 +702,10 @@ func (r *Repository) FinishEvent(ctx context.Context, in EventFinish) error {
 		completed = time.Now()
 	}
 	msg := truncateUTF8(in.ErrorMessage, maxLastErrorLen)
+	unmatchedPaths, err := marshalUnmatchedPaths(in.UnmatchedPaths)
+	if err != nil {
+		return err
+	}
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE autoscan_events
 		SET completed_at = $2,
@@ -682,7 +718,8 @@ func (r *Repository) FinishEvent(ctx context.Context, in EventFinish) error {
 			scans_reused = $8,
 			scans_suppressed = $9,
 			error_message = $10,
-			marker_after = $11
+			unmatched_paths = $11,
+			marker_after = $12
 		WHERE id = $1`,
 		in.ID,
 		completed,
@@ -694,6 +731,7 @@ func (r *Repository) FinishEvent(ctx context.Context, in EventFinish) error {
 		in.ScansReused,
 		in.ScansSuppressed,
 		msg,
+		unmatchedPaths,
 		nullable(in.MarkerAfter),
 	)
 	if err != nil {

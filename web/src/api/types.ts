@@ -2395,6 +2395,12 @@ export interface AutoscanEventScanRun {
   error_message?: string;
 }
 
+export interface AutoscanUnmatchedPath {
+  source_path: string;
+  rewritten_path: string;
+  scope: string;
+}
+
 export interface AutoscanEvent {
   id: number;
   source_id: string | null;
@@ -2413,6 +2419,7 @@ export interface AutoscanEvent {
   scans_reused: number;
   scans_suppressed: number;
   error_message?: string;
+  unmatched_paths: AutoscanUnmatchedPath[];
   scan_runs: AutoscanEventScanRun[];
 }
 

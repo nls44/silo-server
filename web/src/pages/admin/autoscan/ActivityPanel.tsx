@@ -271,6 +271,35 @@ function PollMetricStrip({ event }: { event: AutoscanEvent }) {
   );
 }
 
+function UnmatchedPathsDetails({ event }: { event: AutoscanEvent }) {
+  if (event.unmatched_paths.length === 0) return null;
+  const hasMore = event.changes_returned > event.unmatched_paths.length;
+  return (
+    <details className="mt-3">
+      <summary className="text-muted-foreground cursor-pointer text-xs">
+        {event.unmatched_paths.length} unmatched path sample
+        {event.unmatched_paths.length === 1 ? "" : "s"}
+        {hasMore ? ` (showing first ${event.unmatched_paths.length})` : ""}
+      </summary>
+      <div className="mt-2 space-y-2 text-xs [overflow-wrap:anywhere]">
+        {event.unmatched_paths.map((path, index) => (
+          <div key={`${path.source_path}-${index}`} className="bg-muted/40 rounded-md p-2">
+            <div>
+              <span className="text-muted-foreground">Source: </span>
+              <span className="font-mono">{path.source_path}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">After rewrites: </span>
+              <span className="font-mono">{path.rewritten_path}</span>
+            </div>
+            <div className="text-muted-foreground">Scope: {path.scope}</div>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function QueueCard({
   scan,
   librariesByID,
@@ -635,6 +664,7 @@ function PollEventCard({ event, lookups }: { event: AutoscanEvent; lookups: Sour
           {event.error_message}
         </p>
       ) : null}
+      <UnmatchedPathsDetails event={event} />
       <details className="mt-3">
         <summary className="text-muted-foreground cursor-pointer text-xs">
           {event.scan_runs.length} linked scan {event.scan_runs.length === 1 ? "run" : "runs"}
@@ -691,6 +721,7 @@ function PollEventTable({
                   {event.error_message}
                 </div>
               ) : null}
+              <UnmatchedPathsDetails event={event} />
             </TableCell>
             <TableCell>
               <details>

@@ -49,25 +49,32 @@ type AdminAutoscanEventRun struct {
 	ErrorMessage string   `json:"error_message,omitempty"`
 }
 
+type AdminAutoscanUnmatchedPath struct {
+	SourcePath    string `json:"source_path"`
+	RewrittenPath string `json:"rewritten_path"`
+	Scope         string `json:"scope"`
+}
+
 type AdminAutoscanEvent struct {
-	ID              string                  `json:"id"`
-	SourceID        *string                 `json:"source_id"`
-	PluginID        string                  `json:"plugin_id"`
-	CapabilityID    string                  `json:"capability_id"`
-	StartedAt       Instant                 `json:"started_at"`
-	CompletedAt     Instant                 `json:"completed_at"`
-	DurationMS      int64                   `json:"duration_ms"`
-	Status          string                  `json:"status"`
-	DeliveryMode    string                  `json:"delivery_mode"`
-	ProviderEvent   string                  `json:"provider_event_type,omitempty"`
-	ChangesReturned int                     `json:"changes_returned"`
-	ChangesResolved int                     `json:"changes_resolved"`
-	TargetsClaimed  int                     `json:"targets_claimed"`
-	ScansCreated    int                     `json:"scans_created"`
-	ScansReused     int                     `json:"scans_reused"`
-	ScansSuppressed int                     `json:"scans_suppressed"`
-	ErrorMessage    string                  `json:"error_message,omitempty"`
-	ScanRuns        []AdminAutoscanEventRun `json:"scan_runs"`
+	ID              string                       `json:"id"`
+	SourceID        *string                      `json:"source_id"`
+	PluginID        string                       `json:"plugin_id"`
+	CapabilityID    string                       `json:"capability_id"`
+	StartedAt       Instant                      `json:"started_at"`
+	CompletedAt     Instant                      `json:"completed_at"`
+	DurationMS      int64                        `json:"duration_ms"`
+	Status          string                       `json:"status"`
+	DeliveryMode    string                       `json:"delivery_mode"`
+	ProviderEvent   string                       `json:"provider_event_type,omitempty"`
+	ChangesReturned int                          `json:"changes_returned"`
+	ChangesResolved int                          `json:"changes_resolved"`
+	TargetsClaimed  int                          `json:"targets_claimed"`
+	ScansCreated    int                          `json:"scans_created"`
+	ScansReused     int                          `json:"scans_reused"`
+	ScansSuppressed int                          `json:"scans_suppressed"`
+	ErrorMessage    string                       `json:"error_message,omitempty"`
+	UnmatchedPaths  []AdminAutoscanUnmatchedPath `json:"unmatched_paths"`
+	ScanRuns        []AdminAutoscanEventRun      `json:"scan_runs"`
 }
 
 func registerAdminAutoscanEvents(reg *Registry) {
@@ -106,7 +113,10 @@ func registerAdminAutoscanEvents(reg *Registry) {
 			if e.ID <= 0 {
 				return nil, NewProblem(TypeInternalError, "Invalid event identity.")
 			}
-			row := AdminAutoscanEvent{ID: strconv.FormatInt(e.ID, 10), SourceID: e.SourceID, PluginID: e.PluginID, CapabilityID: e.CapabilityID, StartedAt: NewInstant(e.StartedAt), CompletedAt: NewInstant(e.CompletedAt), DurationMS: e.DurationMS, Status: string(e.Status), DeliveryMode: e.DeliveryMode, ProviderEvent: e.ProviderEventType, ChangesReturned: e.ChangesReturned, ChangesResolved: e.ChangesResolved, TargetsClaimed: e.TargetsClaimed, ScansCreated: e.ScansCreated, ScansReused: e.ScansReused, ScansSuppressed: e.ScansSuppressed, ErrorMessage: e.ErrorMessage, ScanRuns: make([]AdminAutoscanEventRun, 0, len(r.Runs))}
+			row := AdminAutoscanEvent{ID: strconv.FormatInt(e.ID, 10), SourceID: e.SourceID, PluginID: e.PluginID, CapabilityID: e.CapabilityID, StartedAt: NewInstant(e.StartedAt), CompletedAt: NewInstant(e.CompletedAt), DurationMS: e.DurationMS, Status: string(e.Status), DeliveryMode: e.DeliveryMode, ProviderEvent: e.ProviderEventType, ChangesReturned: e.ChangesReturned, ChangesResolved: e.ChangesResolved, TargetsClaimed: e.TargetsClaimed, ScansCreated: e.ScansCreated, ScansReused: e.ScansReused, ScansSuppressed: e.ScansSuppressed, ErrorMessage: e.ErrorMessage, UnmatchedPaths: make([]AdminAutoscanUnmatchedPath, 0, len(e.UnmatchedPaths)), ScanRuns: make([]AdminAutoscanEventRun, 0, len(r.Runs))}
+			for _, path := range e.UnmatchedPaths {
+				row.UnmatchedPaths = append(row.UnmatchedPaths, AdminAutoscanUnmatchedPath{SourcePath: path.SourcePath, RewrittenPath: path.RewrittenPath, Scope: string(path.Scope)})
+			}
 			for _, run := range r.Runs {
 				if run.ID == "" || run.MediaFolderID <= 0 {
 					return nil, NewProblem(TypeInternalError, "Invalid event scan identity.")

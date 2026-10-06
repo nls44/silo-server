@@ -22,7 +22,7 @@ func (f *fakeAdminAutoscanEvents) ReadAdminAutoscanEvents(_ context.Context, in 
 	if in.Offset > 0 {
 		return nil, 1, f.err
 	}
-	return []autoscan.EventWithRuns{{Event: autoscan.Event{ID: 9007199254740993, StartedAt: time.Date(2026, 9, 1, 0, 0, 0, 123456789, time.UTC), CompletedAt: time.Date(2026, 9, 1, 0, 0, 1, 123456789, time.UTC), Status: autoscan.EventStatusSuccess}, Runs: []autoscan.ScanRunSummary{{ID: "run-a", MediaFolderID: 7, Mode: "file", Status: "completed"}}}}, 1, f.err
+	return []autoscan.EventWithRuns{{Event: autoscan.Event{ID: 9007199254740993, StartedAt: time.Date(2026, 9, 1, 0, 0, 0, 123456789, time.UTC), CompletedAt: time.Date(2026, 9, 1, 0, 0, 1, 123456789, time.UTC), Status: autoscan.EventStatusSuccess, UnmatchedPaths: []autoscan.UnmatchedPath{{SourcePath: "/raw/a.mkv", RewrittenPath: "/mnt/media/a.mkv", Scope: autoscan.ChangeScopeFile}}}, Runs: []autoscan.ScanRunSummary{{ID: "run-a", MediaFolderID: 7, Mode: "file", Status: "completed"}}}}, 1, f.err
 }
 func TestAdminAutoscanEvents(t *testing.T) {
 	f := new(fakeAdminAutoscanEvents)
@@ -39,6 +39,9 @@ func TestAdminAutoscanEvents(t *testing.T) {
 	rec := do(t, h, "GET", path+"?limit=1&source_id=source-a&q=needle", "", bearer(adminToken))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"id":"9007199254740993"`) || !strings.Contains(rec.Body.String(), "2026-09-01T00:00:00.123Z") {
 		t.Fatal(rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"rewritten_path":"/mnt/media/a.mkv"`) {
+		t.Fatal(rec.Body.String())
 	}
 	var page AdminAutoscanEventsPage
 	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {

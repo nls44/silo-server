@@ -1859,6 +1859,12 @@
           "targets_claimed": {
             "format": "int64",
             "type": "integer"
+          },
+          "unmatched_paths": {
+            "items": {
+              "$ref": "#/components/schemas/AdminAutoscanUnmatchedPath"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -1877,6 +1883,7 @@
           "scans_created",
           "scans_reused",
           "scans_suppressed",
+          "unmatched_paths",
           "scan_runs"
         ],
         "type": "object"
@@ -2569,6 +2576,26 @@
           "enabled",
           "label",
           "path_rewrites"
+        ],
+        "type": "object"
+      },
+      "AdminAutoscanUnmatchedPath": {
+        "additionalProperties": false,
+        "properties": {
+          "rewritten_path": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "source_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_path",
+          "rewritten_path",
+          "scope"
         ],
         "type": "object"
       },

@@ -108,6 +108,20 @@ const (
 	EventStatusUnresolved EventStatus = "unresolved"
 )
 
+const (
+	maxUnmatchedPathSamples = 10
+	maxUnmatchedPathLength  = 2048
+)
+
+// UnmatchedPath is a bounded admin-facing sample of a source path that could
+// not be resolved to a Silo library folder. SourcePath is the provider's raw
+// path; RewrittenPath is the path after the source's host-side rewrites.
+type UnmatchedPath struct {
+	SourcePath    string      `json:"source_path"`
+	RewrittenPath string      `json:"rewritten_path"`
+	Scope         ChangeScope `json:"scope"`
+}
+
 type Event struct {
 	ID                int64
 	SourceID          *string
@@ -126,6 +140,7 @@ type Event struct {
 	ScansReused       int
 	ScansSuppressed   int
 	ErrorMessage      string
+	UnmatchedPaths    []UnmatchedPath
 	MarkerBefore      *string
 	MarkerAfter       *string
 }
@@ -156,6 +171,7 @@ type EventFinish struct {
 	ScansReused     int
 	ScansSuppressed int
 	ErrorMessage    string
+	UnmatchedPaths  []UnmatchedPath
 	MarkerAfter     string
 }
 

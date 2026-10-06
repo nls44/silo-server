@@ -346,9 +346,11 @@ func (s *Service) consumeSourceChanges(ctx context.Context, src Source, changes 
 	}
 	status := EventStatusSuccess
 	var statusMsg string
+	var unmatchedPaths []UnmatchedPath
 	if len(changes) > 0 && !resolvedAny {
 		status = EventStatusUnresolved
 		statusMsg = fmt.Sprintf("returned %d path(s) but none matched a Silo library folder", len(changes))
+		unmatchedPaths = unmatchedPathSamples(changes, src.PathRewrites)
 		if opts.AdvanceMarker {
 			statusMsg += " — advanced past them"
 			slog.WarnContext(ctx, "autoscan: returned paths matched no library folder — advancing marker",
@@ -386,6 +388,7 @@ func (s *Service) consumeSourceChanges(ctx context.Context, src Source, changes 
 		ScansReused:     result.Enqueue.Reused,
 		ScansSuppressed: stats.Suppressed,
 		ErrorMessage:    statusMsg,
+		UnmatchedPaths:  unmatchedPaths,
 		MarkerAfter:     opts.NextMarker,
 	})
 	return result, nil
@@ -634,6 +637,22 @@ func rewriteChanges(changes []Change, rewrites []PathRewrite) []Change {
 		rewritten = append(rewritten, Change{SourcePath: path, Scope: change.Scope})
 	}
 	return rewritten
+}
+
+func unmatchedPathSamples(changes []Change, rewrites []PathRewrite) []UnmatchedPath {
+	limit := len(changes)
+	if limit > maxUnmatchedPathSamples {
+		limit = maxUnmatchedPathSamples
+	}
+	samples := make([]UnmatchedPath, 0, limit)
+	for _, change := range changes[:limit] {
+		samples = append(samples, UnmatchedPath{
+			SourcePath:    truncateUTF8(change.SourcePath, maxUnmatchedPathLength),
+			RewrittenPath: truncateUTF8(applyRewrites(change.SourcePath, rewrites), maxUnmatchedPathLength),
+			Scope:         change.Scope,
+		})
+	}
+	return samples
 }
 
 // resolveAndClaim resolves changes to scan targets and atomically claims them

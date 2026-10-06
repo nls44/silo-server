@@ -12193,6 +12193,7 @@ export interface components {
       status: string;
       /** Format: int64 */
       targets_claimed: number;
+      unmatched_paths: components["schemas"]["AdminAutoscanUnmatchedPath"][];
     };
     AdminAutoscanEventRun: {
       /**
@@ -12420,6 +12421,11 @@ export interface components {
       last_run_at?: string;
       path_rewrites: components["schemas"]["AdminAutoscanPathRewrite"][];
       plugin_id: string;
+    };
+    AdminAutoscanUnmatchedPath: {
+      rewritten_path: string;
+      scope: string;
+      source_path: string;
     };
     AdminBrandingAsset: {
       /** @enum {string} */

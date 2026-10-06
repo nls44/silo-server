@@ -932,8 +932,29 @@ func TestPollOnceAdvancesMarkerWhenPathsReturnedButNoneResolve(t *testing.T) {
 	if !strings.Contains(event.ErrorMessage, "none matched a Silo library folder") {
 		t.Fatalf("event message = %q", event.ErrorMessage)
 	}
+	if len(event.UnmatchedPaths) != 2 {
+		t.Fatalf("unmatched paths = %+v, want two samples", event.UnmatchedPaths)
+	}
+	if got := event.UnmatchedPaths[0]; got.SourcePath != "/data/tv/Show/S01/E01.mkv" || got.RewrittenPath != got.SourcePath || got.Scope != ChangeScopeAuto {
+		t.Fatalf("first unmatched path = %+v", got)
+	}
 	if event.MarkerAfter != "m1" {
 		t.Fatalf("event marker after = %q, want %q", event.MarkerAfter, "m1")
+	}
+}
+
+func TestUnmatchedPathSamplesAreBoundedAndRewritten(t *testing.T) {
+	changes := make([]Change, 0, maxUnmatchedPathSamples+1)
+	for i := 0; i < maxUnmatchedPathSamples+1; i++ {
+		changes = append(changes, Change{SourcePath: "/remote/media/file-" + strconv.Itoa(i) + ".mkv", Scope: ChangeScopeFile})
+	}
+
+	samples := unmatchedPathSamples(changes, []PathRewrite{{From: "/remote/media", To: "/mnt/media"}})
+	if len(samples) != maxUnmatchedPathSamples {
+		t.Fatalf("sample count = %d, want %d", len(samples), maxUnmatchedPathSamples)
+	}
+	if samples[0].SourcePath != "/remote/media/file-0.mkv" || samples[0].RewrittenPath != "/mnt/media/file-0.mkv" {
+		t.Fatalf("first sample = %+v", samples[0])
 	}
 }
 

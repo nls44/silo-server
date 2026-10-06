@@ -2441,6 +2441,9 @@ The Activity panel keeps polling and numbered pages through at most100 cursor
 reads per requested page. Captured authority/PIN cache identity, stale-response
 checks and no previous-page placeholders isolate authority transitions. Unsupported
 states, unsafe numeric IDs and invalid continuation fail without partial success.
+Unresolved events also include a bounded `unmatched_paths` sample showing each
+provider path and its post-rewrite path, so an administrator can diagnose library
+root mismatches without querying the database.
 
 ### Write autoscan settings (v2)
 
