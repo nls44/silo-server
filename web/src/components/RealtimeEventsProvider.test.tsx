@@ -275,8 +275,9 @@ describe("RealtimeEventsProvider", () => {
       </QueryClientProvider>,
     );
 
-    act(() => {
-      FakeWebSocket.instances[0]?.emitMessage({
+    await act(async () => {});
+    await act(async () => {
+      FakeWebSocket.instances[0]!.emitMessage({
         type: "event",
         channel: "scans",
         event: "scan.completed",

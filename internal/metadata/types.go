@@ -159,7 +159,7 @@ type MatchHints struct {
 	// exact normalized-title match even without a year hint or cross-source
 	// corroboration. Off by default (see selectInitialMatchCandidate).
 	AggressiveAutoMatch bool
-	LibraryRoots              []string // Internal naming context; configured containers do not identify series or seasons.
+	LibraryRoots        []string // Internal naming context; configured containers do not identify series or seasons.
 	// AlternateIdentities are independently parsed title/year hypotheses from
 	// the filename and surrounding directories. They are tried only after the
 	// primary scanner identity fails, keeping provider traffic bounded while
