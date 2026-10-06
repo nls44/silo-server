@@ -8,6 +8,25 @@ import (
 	"testing"
 )
 
+func TestSupportsExternalSubtitleFile(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{path: "Movie.srt", want: true},
+		{path: "Movie.EN.VTT", want: true},
+		{path: "Movie.ass", want: true},
+		{path: "Movie.mkv", want: false},
+		{path: "Movie", want: false},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			if got := SupportsExternalSubtitleFile(tc.path); got != tc.want {
+				t.Fatalf("SupportsExternalSubtitleFile(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestExternalSubtitleDirCacheMatchesSidecars(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"Movie.mkv", "Movie.srt", "Movie.en.forced.SRT", "MovieExtra.srt", "Movie.jpg", "Movie.part2.mkv", "Movie.part2.fr.ass", "Other.vtt"} {

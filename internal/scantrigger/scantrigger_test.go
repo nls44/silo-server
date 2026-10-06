@@ -427,6 +427,78 @@ func TestResolverClassifiesVideoFile(t *testing.T) {
 	}
 }
 
+func TestResolverClassifiesExternalSubtitleFileAsContainingSubtree(t *testing.T) {
+	root := t.TempDir()
+	movieDir := filepath.Join(root, "Movie (2024)")
+	if err := os.Mkdir(movieDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	subtitlePath := filepath.Join(movieDir, "Movie (2024).en.srt")
+	if err := os.WriteFile(subtitlePath, []byte("1\n00:00:00,000 --> 00:00:01,000\nHello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := &fakeFolderRepo{folders: []*models.MediaFolder{{
+		ID:      27,
+		Name:    "Movies",
+		Type:    "movies",
+		Enabled: true,
+		Paths:   []string{root},
+	}}}
+
+	target, err := NewResolver(repo).Resolve(context.Background(), Request{Path: subtitlePath, Trigger: "realtime_monitor"})
+	if err != nil {
+		t.Fatalf("Resolve returned error: %v", err)
+	}
+	if target.Folder == nil || target.Folder.ID != 27 || target.Mode != ModeSubtree || target.Path != movieDir || target.Trigger != "realtime_monitor" {
+		t.Fatalf("unexpected target: %#v", target)
+	}
+}
+
+func TestResolverClassifiesVanishedExternalSubtitleFileAsContainingSubtree(t *testing.T) {
+	root := t.TempDir()
+	movieDir := filepath.Join(root, "Movie (2024)")
+	if err := os.Mkdir(movieDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	subtitlePath := filepath.Join(movieDir, "Movie (2024).en.srt")
+	repo := &fakeFolderRepo{folders: []*models.MediaFolder{{
+		ID:      28,
+		Name:    "Movies",
+		Type:    "movies",
+		Enabled: true,
+		Paths:   []string{root},
+	}}}
+
+	target, err := NewResolver(repo).ResolveVanishedPath(context.Background(), subtitlePath, "realtime_monitor")
+	if err != nil {
+		t.Fatalf("ResolveVanishedPath returned error: %v", err)
+	}
+	if target.Folder == nil || target.Folder.ID != 28 || target.Mode != ModeSubtree || target.Path != movieDir || target.Trigger != "realtime_monitor" {
+		t.Fatalf("unexpected target: %#v", target)
+	}
+}
+
+func TestResolverRejectsExternalSubtitleFileForNonVideoLibrary(t *testing.T) {
+	root := t.TempDir()
+	subtitlePath := filepath.Join(root, "Book.srt")
+	if err := os.WriteFile(subtitlePath, []byte("subtitle"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repo := &fakeFolderRepo{folders: []*models.MediaFolder{{
+		ID:      29,
+		Name:    "Books",
+		Type:    "ebooks",
+		Enabled: true,
+		Paths:   []string{root},
+	}}}
+
+	_, err := NewResolver(repo).Resolve(context.Background(), Request{Path: subtitlePath})
+	var reqErr *RequestError
+	if !errors.As(err, &reqErr) || reqErr.Reason != ReasonUnsupportedExtension {
+		t.Fatalf("expected unsupported subtitle extension, got %v", err)
+	}
+}
+
 func TestResolverClassifiesAudioAndEbookFiles(t *testing.T) {
 	for _, tc := range []struct {
 		name        string

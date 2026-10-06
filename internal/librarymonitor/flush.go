@@ -13,8 +13,8 @@ import (
 )
 
 // flush resolves the changes due at now into scan targets and queues them.
-// A *scantrigger.RequestError is an expected skip (a sidecar file, a path
-// that vanished again, a library root that went offline). Other resolve and
+// A *scantrigger.RequestError is an expected skip (a path that vanished again,
+// a library root that went offline). Other resolve and
 // enqueue failures are retried once on the next flush, then dropped with a
 // warning.
 func (m *Monitor) flush(ctx context.Context, now time.Time) {

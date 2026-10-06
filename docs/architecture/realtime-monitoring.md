@@ -314,9 +314,13 @@ Every 2 seconds the monitor flushes reported changes:
    folder stay cataloged, and the library shows a partial-scan warning, until
    the next full library scan marks them missing. Deleted files are
    reconciled at once, because their folder still exists.
-2. A `scantrigger.RequestError` (a sidecar file, a path that vanished again, an
-   offline root) is an expected skip. Other resolve errors are retried once on
-   the next flush, then dropped with a warning.
+   External subtitle sidecars in video libraries are resolved to their containing
+   directory, so adding, replacing, or deleting an `.srt`, `.vtt`, `.ass`, `.ssa`,
+   or `.sub` file queues the same narrow scan that detects the associated media
+   file's sidecars.
+2. A `scantrigger.RequestError` (a path that vanished again, an offline root) is
+   an expected skip. Other resolve errors are retried once on the next flush,
+   then dropped with a warning.
 3. A single change that resolves to a whole-library target is dropped, and so
    is a target whose library no longer has monitoring on.
 4. Targets are deduplicated. A library with more than 1,000 targets in one

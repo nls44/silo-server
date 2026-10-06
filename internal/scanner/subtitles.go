@@ -19,6 +19,12 @@ var subtitleExtensions = map[string]bool{
 	".sub": true,
 }
 
+// SupportsExternalSubtitleFile reports whether path has an extension that the
+// video scanner treats as an external subtitle sidecar.
+func SupportsExternalSubtitleFile(path string) bool {
+	return subtitleExtensions[strings.ToLower(filepath.Ext(path))]
+}
+
 type externalSubtitleDirCache struct {
 	mu   sync.Mutex
 	dirs map[string]externalSubtitleDirListing
@@ -102,7 +108,7 @@ func externalSubtitleCandidates(entries []os.DirEntry) []externalSubtitleCandida
 
 		name := entry.Name()
 		ext := strings.ToLower(filepath.Ext(name))
-		if !subtitleExtensions[ext] {
+		if !SupportsExternalSubtitleFile(name) {
 			continue
 		}
 		candidates = append(candidates, externalSubtitleCandidate{

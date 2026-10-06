@@ -189,9 +189,10 @@ func normalizeTrigger(trigger string) string {
 // ResolveVanishedPath resolves a change for a path that no longer exists on
 // disk (a file deleted by an upgrade/replacement, or a removed directory) to a
 // reconciling scan target. Paths with a supported extension for their library
-// map to a media-file scan (see mediaFileTarget); paths with a media extension
-// the library type does not support are rejected; remaining paths map to a
-// subtree scan of the path itself. The scoped scan marks vanished files
+// map to a media-file scan (see mediaFileTarget); external subtitle sidecars in
+// video libraries map to their containing directory; paths with a media
+// extension the library type does not support are rejected; remaining paths map
+// to a subtree scan of the path itself. The scoped scan marks vanished files
 // missing so stale versions stop being offered for playback.
 //
 // Two guards keep this from turning transient storage loss into cleanup:
@@ -222,6 +223,9 @@ func (r *Resolver) ResolveVanishedPath(ctx context.Context, path, trigger string
 	}
 	trigger = normalizeTrigger(trigger)
 
+	if scanner.SupportsExternalSubtitleFile(cleanPath) && scansVideoFiles(folder.Type) {
+		return &Target{Folder: folder, Mode: ModeSubtree, Path: filepath.Dir(cleanPath), Trigger: trigger}, nil
+	}
 	if supportsLibraryMediaFile(cleanPath, folder.Type) {
 		mode, targetPath, err := mediaFileTarget(cleanPath, matchedRoot, folder.Type)
 		if err != nil {
@@ -300,6 +304,22 @@ func (r *Resolver) resolve(ctx context.Context, req Request, pathFolders []*mode
 		return nil, &RequestError{Status: http.StatusConflict, Code: codeConflict, Message: msgLibraryDisabled, Reason: ReasonLibraryDisabled}
 	}
 
+	if scanner.SupportsExternalSubtitleFile(cleanPath) && scansVideoFiles(folder.Type) {
+		targetPath, handled, err := externalSubtitleTarget(cleanPath, matchedRoot)
+		if err != nil {
+			return nil, err
+		}
+		if handled {
+			if trigger == "manual" {
+				trigger = "path"
+				if req.LibraryID != nil {
+					trigger = "library_id_path"
+				}
+			}
+			return &Target{Folder: folder, Mode: ModeSubtree, Path: targetPath, Trigger: trigger}, nil
+		}
+	}
+
 	mode, err := ClassifyLibraryPath(cleanPath, matchedRoot, folder.Type)
 	if err != nil {
 		return nil, err
@@ -322,6 +342,47 @@ func (r *Resolver) resolve(ctx context.Context, req Request, pathFolders []*mode
 		}
 	}
 	return &Target{Folder: folder, Mode: mode, Path: targetPath, Trigger: trigger}, nil
+}
+
+// externalSubtitleTarget recognizes a present, regular subtitle sidecar and
+// widens it to the directory containing the media file. Directories whose
+// names happen to end in a subtitle extension are left to the normal path
+// classifier.
+func externalSubtitleTarget(cleanPath, matchedRoot string) (string, bool, error) {
+	info, err := os.Stat(cleanPath)
+	if err != nil {
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return "", false, &RequestError{Status: http.StatusBadRequest, Code: codeBadRequest, Message: "Path does not exist", Reason: ReasonPathMissing}
+		case errors.Is(err, os.ErrPermission):
+			return "", false, &RequestError{Status: http.StatusBadRequest, Code: codeBadRequest, Message: "Permission denied for path", Reason: ReasonPathPermissionDenied}
+		default:
+			return "", false, &RequestError{Status: http.StatusBadRequest, Code: codeBadRequest, Message: msgPathNotInspectable, Reason: ReasonPathNotInspectable}
+		}
+	}
+	if info.IsDir() {
+		return "", false, nil
+	}
+	if !info.Mode().IsRegular() {
+		return "", false, &RequestError{Status: http.StatusBadRequest, Code: codeBadRequest, Message: "Path must be a file or directory", Reason: ReasonPathNotFileOrDir}
+	}
+
+	dir := filepath.Dir(cleanPath)
+	if filepath.Clean(dir) == filepath.Clean(matchedRoot) {
+		return dir, true, nil
+	}
+	info, err = os.Stat(dir)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "", false, &RequestError{Status: http.StatusBadRequest, Code: codeBadRequest, Message: "Path does not exist", Reason: ReasonPathMissing}
+	case errors.Is(err, os.ErrPermission):
+		return "", false, &RequestError{Status: http.StatusBadRequest, Code: codeBadRequest, Message: "Permission denied for path", Reason: ReasonPathPermissionDenied}
+	case err != nil:
+		return "", false, &RequestError{Status: http.StatusBadRequest, Code: codeBadRequest, Message: msgPathNotInspectable, Reason: ReasonPathNotInspectable}
+	case !info.IsDir():
+		return "", false, &RequestError{Status: http.StatusBadRequest, Code: codeBadRequest, Message: "Path must be a file or directory", Reason: ReasonPathNotFileOrDir}
+	}
+	return dir, true, nil
 }
 
 // mediaFileTarget widens a video file request to a subtree scan of the file's
